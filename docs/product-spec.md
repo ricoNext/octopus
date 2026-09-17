@@ -64,7 +64,7 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - 正式产品名未定。窗标题临时用「工作树编排」。
 - 仓库路径（已定）：本机
   `/Users/ricolee/Desktop/rico/octopus`。
-  产品文档在仓库 `docs/`。
+  产品文档在本仓库 `docs/`，跟着 git 跟踪。
 
 ## 4. 对象
 

@@ -16,7 +16,7 @@ Star Lee 的桌面端简易版 Agent Worktree 工具。
 ## 约束
 
 - 未宣布开工前只维护规格与设计，不写应用代码。
-- 产品文档在本仓库 `docs/`：
+- 产品文档在本仓库 `docs/`，跟着 git 跟踪：
   `product-design.md`、`product-spec.md`、
   `project-context.md`。
 - 应用代码与文档同一仓库，本机路径为
