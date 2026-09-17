@@ -330,12 +330,18 @@ diff；在 Cursor / 访达打开；重启后恢复侧栏。删除
 
 ## 9. 技术栈（已定）
 
-已定：Tauri（macOS）。不再在 Electron / SwiftUI /
-Wails 之间做选型 spike。
+已定，不再做选型 spike：
 
-前端框架不在本次产品拍板范围，实现时在 Tauri 2
-约束内自定。PTY、git 子进程、关窗杀进程属于实现
-必做，不是产品可选项。
+- 桌面：Tauri 2，只 macOS。
+- 前端：React + TypeScript + Vite。
+- 终端：xterm.js + Rust `portable-pty`。
+- UI：组件库（Radix / shadcn 一类）。
+- 持久化：本地 JSON。
+- 包管理：bun。
+- git：本机 PATH 的 `git`，不内嵌。
+
+git 子进程、关窗杀进程属于实现必做，不是产品
+可选项。
 
 未采纳：Electron、纯 SwiftUI、Wails、Flutter。
 
@@ -354,7 +360,9 @@ Wails 之间做选型 spike。
 6. 权限：不做。不包高权限旗标，无每项目开关。
 7. PR：不做。
 8. 语言：中文 UI。正式名未定。
-9. 技术栈：Tauri。
+9. 技术栈：Tauri 2 + React + TypeScript + Vite；
+   终端 xterm.js + `portable-pty`；UI 用 Radix /
+   shadcn 一类；本地 JSON；包管理 bun；git 走 PATH。
 10. Orca 源码：独立实现，不读不 fork。
     （未明确回复，按默认）
 11. 新 worktree 依赖 / `.env`：不管，无 setup 脚本。

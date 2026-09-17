@@ -17,7 +17,8 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 ### 2.1 做
 
 - 只 macOS；单用户；单个主窗口。
-- Tauri 2 桌面应用；中文 UI。
+- Tauri 2 桌面应用；中文 UI。前端 React、TypeScript、
+  Vite。包管理 bun。
 - Project = 一个本地 git 仓库。
 - 创建、列出、导入、删除 worktree。
 - 添加项目时必须扫描已有 worktree 并勾选导入
@@ -57,15 +58,19 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - 不配置、不打包 Windows 或 Linux 目标。
 - 依赖本机 `git` 在 PATH 中可用。缺少则在添加项目时
   明确报错，不内嵌 git 二进制。
-- 终端用 PTY，登录壳（优先 `$SHELL`，否则
-  `/bin/zsh`）。继承登录环境，便于用户自己敲
-  `claude` 等命令。应用不改 argv。
+- 终端：xterm.js + Rust `portable-pty`。登录壳（优先
+  `$SHELL`，否则 `/bin/zsh`）。继承登录环境，便于
+  用户自己敲 `claude` 等命令。应用不改 argv。
 - 文件访问：用户选出的主仓、默认 worktrees 目录。
   用系统文件夹选择器添加项目。
 - 关应用或删 Worktree 时结束对应 PTY，避免孤儿进程。
 - 独立实现。禁止把 Orca 仓库当依赖或拷贝其源码。
   （未明确回复，按默认）
-- 前端框架由实现自定，须跑在 Tauri 2 WebView 内。
+- 已定技术栈：Tauri 2（只 macOS）；前端 React +
+  TypeScript + Vite；终端 xterm.js + Rust
+  `portable-pty`；UI 用 Radix / shadcn 一类组件库；
+  持久化本地 JSON；包管理 bun；git 用本机 PATH，
+  不内嵌。前端跑在 Tauri 2 WebView 内。
 - 正式产品名未定。窗标题临时用「工作树编排」。
 - 仓库路径（已定）：本机
   `/Users/ricolee/Desktop/rico/octopus`。
@@ -255,9 +260,9 @@ worktree，先提示去删除或保留（保留则只取消登记）。
 
 ## 8. 持久化
 
-本地存储即可（JSON 或 SQLite，实现自定）。存
-Project 与 Worktree 字段，不存终端缓冲、不存 diff
-缓存为产品数据。路径用绝对路径。
+已定：本地 JSON。存 Project 与 Worktree 字段，不存
+终端缓冲、不存 diff 缓存为产品数据。路径用绝对路径。
+不做 SQLite。
 
 ## 9. 错误原则
 

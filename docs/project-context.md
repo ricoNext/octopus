@@ -24,7 +24,7 @@ Star Lee 的桌面端简易版 Agent Worktree 工具。
 - 不卖模型、不拦 prompt、不启动任何 agent CLI。
 - Worktree 必须是真实 `git worktree`，可用普通 git。
 - 自动生成的 Markdown 须能通过 markdownlint。
-- 中文 UI。桌面栈已锁 Tauri。只做 macOS。
+- 中文 UI。只做 macOS。技术栈已锁，见下。
 - 独立实现：不读、不 fork Orca 源码。
 
 ## 已确定事项
@@ -43,7 +43,11 @@ Star Lee 的桌面端简易版 Agent Worktree 工具。
 - 权限：不做。不包高权限旗标，无每项目权限开关。
 - GitHub PR：不做。
 - UI 语言：中文。正式产品名未定，不挡 MVP。
-- 技术栈：Tauri。不再做选型 spike。
+- 技术栈已定：Tauri 2（只 macOS）；React +
+  TypeScript + Vite；终端 xterm.js + Rust
+  `portable-pty`；UI 为 Radix / shadcn 一类；
+  持久化本地 JSON；包管理 bun；git 用本机 PATH，
+  不内嵌。不再做选型 spike。
 - Orca 源码：独立实现，不读不 fork。
   （未明确回复，按默认）
 - 新 worktree 的依赖 / `.env`：不管，无 setup 脚本。
