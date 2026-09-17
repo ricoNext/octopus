@@ -20,6 +20,11 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - Tauri 2 桌面应用；中文 UI。
 - Project = 一个本地 git 仓库。
 - 创建、列出、导入、删除 worktree。
+- 添加项目时必须扫描已有 worktree 并勾选导入
+  （必做，不是可选项）。
+- 删除工作树时用确认提示，让用户选择要不要同时
+  删除对应 git 分支。
+- 新建工作树的起始分支只列本地分支。
 - 每 Worktree 一个内嵌 PTY，cwd 为该树根目录。
 - 相对创建时记录的 start-from，展示只读 diff。
 - 「在 Cursor 中打开」「在访达中显示」。
@@ -39,7 +44,7 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - 内嵌浏览器、Design Mode。
 - 分屏、多终端标签、跨树看板。
 - SSH、远程机、手机伴侣。
-- 自动 `git fetch`、自动删本地分支。
+- 自动 `git fetch`；静默删除本地分支。
 - 模型网关、账号系统、计费。
 - 读或 fork Orca 源码。
   （未明确回复，按默认）
@@ -90,7 +95,7 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - `projectId`
 - `displayName`：用户填写。
 - `branchName`
-- `startFrom`：创建时的起始 ref（完整本地 ref 名）。
+- `startFrom`：创建时的起始 ref（完整本地分支名）。
 - `path`：绝对路径。
 - `origin`：`app`（本应用创建）或 `imported`。
 - `status`：`creating` / `ready` / `error`。
@@ -140,8 +145,9 @@ diff（可折叠，默认打开）。
 
 - 显示名（必填）
 - 分支名（选填，空则用 slug）
-- 起始分支（选填，默认 Project.defaultBranch；选项为
-  本地分支列表，不含 SHA、不含远程跟踪的单独 UI）
+- 起始分支（选填，默认 Project.defaultBranch）。
+  已定：只列出本地分支；不自动 `git fetch`；
+  不提供远程跟踪分支或 SHA 的单独 UI。
 
 无 Agent 下拉。无「高权限」勾选。无路径输入框。
 
@@ -159,8 +165,9 @@ MVP 无设置页。
    `git branch --show-current`，再失败则 `main` 并在
    UI 提示「未读到默认分支，已用 main」。
 5. 持久化 Project。
-6. 跑 `git worktree list --porcelain`。除主仓外的条目
-   列在确认列表，用户勾选导入；可不导。
+6. 必须跑 `git worktree list --porcelain`。除主仓外
+   的条目列在确认列表，供用户勾选导入。此步是添加
+   项目的必做流程，不是可选项；用户可以一个都不勾。
 
 ### 7.2 新建工作树
 
@@ -177,7 +184,8 @@ MVP 无设置页。
    或放弃（放弃不留半成品目录；若 git 已建出目录，
    调用 `git worktree remove --force` 尽力清理）。
 
-不执行 `git fetch`。不安装依赖。不复制 `.env`。
+已定：不执行 `git fetch`。`startFrom` 只来自本地
+分支。不安装依赖。不复制 `.env`。
 （依赖项未明确回复，按默认）
 
 ### 7.3 使用终端
@@ -219,14 +227,19 @@ git diff <startFrom>
 
 ### 7.7 删除工作树
 
-1. 确认对话框，文案说明：删除磁盘上的工作树目录，
-   不删除 git 分支。
+1. 确认对话框。文案说明：将删除磁盘上的工作树目录。
+   让用户选择要不要同时删除对应 git 分支（例如勾选
+   「同时删除本地分支」）。已定：不是静默删分支，
+   也不是永远不删分支。
 2. 先结束该树 PTY。
 3. `git worktree remove <path>`（在主仓执行）。
 4. 若因未提交改动失败：展示 stderr，提供
    「强制删除」二次确认，对应
    `git worktree remove --force`。
-5. 成功后从侧栏和本地元数据去掉该条。
+5. 工作树目录去掉后：若用户选择了同时删分支，再
+   删除该本地分支；失败则展示 git stderr，不回滚
+   已删除的工作树。
+6. 从侧栏和本地元数据去掉该条。
 
 禁止对主 checkout 走此流程。移除 Project：只从本应用
 忘掉该仓，不删磁盘上的 git 数据；若仍有本应用创建的
@@ -265,10 +278,13 @@ Project 与 Worktree 字段，不存终端缓冲、不存 diff
 5. 改一个文件后，diff 区相对 start-from 能看到变更。
 6. 「在访达中显示」打开正确文件夹。
 7. Cursor 已安装时「在 Cursor 中打开」打开该路径。
-8. 删除工作树后目录消失，本地分支仍在。
+8. 删除工作树后目录消失。确认时未选择删分支则本地
+    分支仍在；选择了则对应分支也被删除。
 9. 退出再打开，项目与仍存在的工作树还在。
 10. UI 可见文案为中文。
 11. 无设置项可改 worktree 根目录；无 Agent 名单。
+12. 添加含已有 worktree 的仓时，出现勾选导入列表。
+13. 新建工作树的起始分支只有本地分支，不发起 fetch。
 
 ## 11. 以后再说
 

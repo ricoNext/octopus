@@ -50,6 +50,12 @@ Star Lee 的桌面端简易版 Agent Worktree 工具。
   （未明确回复，按默认）
 - 实现目录：`/Users/ricolee/Desktop/rico/octopus`。
 - 核心对象：Project、Worktree、终端。无 Agent 对象。
+- 删除工作树：确认提示里让用户选择要不要同时删
+  对应 git 分支。不是静默删，也不是永远不删。
+- 添加项目：必须扫描 `git worktree list` 并勾选导入
+  已有 worktree（必做，不是可选项）。
+- 起始分支：只给本地分支，不自动 fetch，不提供
+  远程跟踪 / SHA 的单独 UI。
 - 对标调研已完成。Orca 桌面端免费、MIT、BYO 订阅；
   无公开按座价；`/pricing` 为 404。
 
