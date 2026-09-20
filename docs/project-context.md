@@ -18,7 +18,8 @@ Star Lee 的桌面端简易版 Agent Worktree 工具。
 - 未宣布开工前只维护规格与设计，不写应用代码。
 - 产品文档在本仓库 `docs/`，跟着 git 跟踪：
   `product-design.md`、`product-spec.md`、
-  `project-context.md`。
+  `project-context.md`。终端会话持久化设计稿见
+  `terminal-session-persistence-design.md`，当前已开始实现阶段一。
 - 应用代码与文档同一仓库，本机路径为
   `/Users/ricolee/Desktop/rico/octopus`。
 - 不卖模型、不拦 prompt、不启动任何 agent CLI。

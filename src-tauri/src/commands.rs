@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::models::{
-    AppSnapshot, DeleteResult, DiffResult, InspectResult, RemoveProjectResult, Store,
+    AppSnapshot, DeleteResult, InspectResult, RemoveProjectResult, Store,
 };
 use crate::pty::PtyManager;
 use crate::workspace::{self, CreateOutcome};
@@ -75,6 +75,15 @@ pub fn inspect_repo(state: State<AppState>, path: String) -> Result<InspectResul
 }
 
 #[tauri::command]
+pub fn default_worktree_parent(
+    state: State<AppState>,
+    project_id: String,
+) -> Result<String, String> {
+    let store = locked_store(&state)?;
+    workspace::default_worktree_parent_for_project(&store, &project_id)
+}
+
+#[tauri::command]
 pub fn add_project(
     state: State<AppState>,
     path: String,
@@ -96,8 +105,8 @@ pub fn create_worktree(
     state: State<AppState>,
     project_id: String,
     display_name: String,
-    branch_name: Option<String>,
     start_from: Option<String>,
+    parent_path: Option<String>,
 ) -> Result<MutationResult, String> {
     let _guard = CreateGuard::acquire(&state.creating, project_id.clone())?;
     let mut store = locked_store(&state)?;
@@ -105,8 +114,8 @@ pub fn create_worktree(
         &mut store,
         &project_id,
         display_name,
-        branch_name,
         start_from,
+        parent_path,
     )?;
     persist(&state, &store)?;
     Ok(mutation_from_create(store.snapshot(), outcome))
@@ -150,7 +159,7 @@ pub fn abandon_worktree(
     state: State<AppState>,
     worktree_id: String,
 ) -> Result<AppSnapshot, String> {
-    state.ptys.kill(&worktree_id);
+    state.ptys.kill_context(&worktree_id);
     let mut store = locked_store(&state)?;
     workspace::abandon_worktree(&mut store, &worktree_id)?;
     persist(&state, &store)?;
@@ -164,7 +173,7 @@ pub fn delete_worktree(
     delete_branch: bool,
     force: bool,
 ) -> Result<DeleteResult, String> {
-    state.ptys.kill(&worktree_id);
+    state.ptys.kill_context(&worktree_id);
     let mut store = locked_store(&state)?;
     let result = workspace::delete_worktree(&mut store, &worktree_id, delete_branch, force)?;
     persist(&state, &store)?;
@@ -176,7 +185,7 @@ pub fn remove_missing_worktree(
     state: State<AppState>,
     worktree_id: String,
 ) -> Result<AppSnapshot, String> {
-    state.ptys.kill(&worktree_id);
+    state.ptys.kill_context(&worktree_id);
     let mut store = locked_store(&state)?;
     workspace::remove_missing_worktree(&mut store, &worktree_id)?;
     persist(&state, &store)?;
@@ -200,12 +209,18 @@ pub fn remove_project(
     };
     if forget {
         for id in &ids {
-            state.ptys.kill(id);
+            state.ptys.kill_context(id);
         }
     }
     let mut store = locked_store(&state)?;
     let result = workspace::remove_project(&mut store, &project_id, forget)?;
     persist(&state, &store)?;
+    if matches!(result, RemoveProjectResult::Ok { .. }) {
+        for id in &ids {
+            state.ptys.kill_context(id);
+        }
+        state.ptys.kill_context(&project_id);
+    }
     Ok(result)
 }
 
@@ -216,12 +231,6 @@ pub fn list_local_branches(
 ) -> Result<Vec<String>, String> {
     let store = locked_store(&state)?;
     workspace::list_branches(&store, &project_id)
-}
-
-#[tauri::command]
-pub fn get_diff(state: State<AppState>, worktree_id: String) -> Result<DiffResult, String> {
-    let store = locked_store(&state)?;
-    workspace::get_diff(&store, &worktree_id)
 }
 
 #[tauri::command]
@@ -236,37 +245,42 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn pty_open(
-    app: AppHandle,
     state: State<AppState>,
-    worktree_id: String,
+    session_id: String,
+    cwd_id: String,
     cols: u16,
     rows: u16,
-) -> Result<bool, String> {
+) -> Result<crate::pty::AttachResult, String> {
     let cwd = {
         let store = locked_store(&state)?;
-        PathBuf::from(workspace::worktree_cwd(&store, &worktree_id)?)
+        PathBuf::from(workspace::session_cwd(&store, &cwd_id)?)
     };
-    state.ptys.open(app, worktree_id, &cwd, cols, rows)
+    state.ptys.open(session_id, cwd_id, &cwd, cols, rows)
 }
 
 #[tauri::command]
-pub fn pty_write(state: State<AppState>, worktree_id: String, data: String) -> Result<(), String> {
-    state.ptys.write(&worktree_id, &data)
+pub fn pty_detach(state: State<AppState>, session_id: String) -> Result<(), String> {
+    state.ptys.detach(&session_id)
+}
+
+#[tauri::command]
+pub fn pty_write(state: State<AppState>, session_id: String, data: String) -> Result<(), String> {
+    state.ptys.write(&session_id, &data)
 }
 
 #[tauri::command]
 pub fn pty_resize(
     state: State<AppState>,
-    worktree_id: String,
+    session_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    state.ptys.resize(&worktree_id, cols, rows)
+    state.ptys.resize(&session_id, cols, rows)
 }
 
 #[tauri::command]
-pub fn pty_kill(state: State<AppState>, worktree_id: String) {
-    state.ptys.kill(&worktree_id);
+pub fn pty_kill(state: State<AppState>, session_id: String) {
+    state.ptys.kill(&session_id);
 }
 
 pub fn init_state(app: &AppHandle) -> Result<(), String> {
@@ -282,7 +296,7 @@ pub fn init_state(app: &AppHandle) -> Result<(), String> {
     app.manage(AppState {
         store: Mutex::new(store),
         creating: Mutex::new(HashSet::new()),
-        ptys: PtyManager::new(),
+        ptys: PtyManager::new(app, &dir)?,
         store_path,
     });
     Ok(())

@@ -41,10 +41,16 @@ fn is_han(ch: char) -> bool {
     )
 }
 
-pub fn worktree_dest(root: &Path, slug: &str) -> PathBuf {
-    let parent = root.parent().unwrap_or(root);
+pub fn default_worktree_parent(root: &Path) -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.parent().unwrap_or(root).to_path_buf());
     let name = root.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    parent.join(format!("{name}-worktrees")).join(slug)
+    home.join(".octopus").join("worktree").join(name.as_ref())
+}
+
+pub fn worktree_dest(parent: &Path, name: &str) -> PathBuf {
+    parent.join(name)
 }
 
 #[cfg(test)]
@@ -64,10 +70,10 @@ mod tests {
 
     #[test]
     fn dest_matches_spec_example() {
-        let root = PathBuf::from("/Users/star/code/acme");
+        let parent = PathBuf::from("/Users/star/.octopus/worktree/acme");
         assert_eq!(
-            worktree_dest(&root, "xiu-deng-lu"),
-            PathBuf::from("/Users/star/code/acme-worktrees/xiu-deng-lu")
+            worktree_dest(&parent, "xiu-deng-lu"),
+            PathBuf::from("/Users/star/.octopus/worktree/acme/xiu-deng-lu")
         );
     }
 }

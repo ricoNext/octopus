@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sunrise octopus icon">
+  <rect width="512" height="512" rx="112" fill="#f8f1e7"/>
+  <rect x="22" y="22" width="468" height="468" rx="94" fill="#fffaf3" stroke="#e6d9c8" stroke-width="8"/>
+  <g fill="none" stroke="#0f766e" stroke-linecap="round" stroke-linejoin="round" stroke-width="29">
+    <path d="M178 330c-28 11-49 5-62-14-9-13-7-28 4-41"/>
+    <path d="M190 348c-24 25-47 31-67 22-17-8-24-22-21-40"/>
+    <path d="M169 374c-12 32-31 47-54 44-18-2-29-14-33-31"/>
+    <path d="M215 367c-6 30-20 49-41 57-17 6-31 1-42-13"/>
+    <path d="M334 330c28 11 49 5 62-14 9-13 7-28-4-41"/>
+    <path d="M322 348c24 25 47 31 67 22 17-8 24-22 21-40"/>
+    <path d="M343 374c12 32 31 47 54 44 18-2 29-14 33-31"/>
+    <path d="M297 367c6 30 20 49 41 57 17 6 31 1 42-13"/>
+  </g>
+  <path d="M150 243c0-75 47-125 106-125s106 50 106 125c0 70-40 112-106 112s-106-42-106-112Z" fill="#f97316"/>
+  <path d="M176 244c0-52 31-89 80-89s80 37 80 89c0 47-29 75-80 75s-80-28-80-75Z" fill="#fb923c"/>
+  <circle cx="222" cy="242" r="15" fill="#173b3b"/>
+  <circle cx="290" cy="242" r="15" fill="#173b3b"/>
+  <path d="M238 280c11 10 25 10 36 0" fill="none" stroke="#173b3b" stroke-linecap="round" stroke-width="11"/>
+  <circle cx="195" cy="195" r="8" fill="#fed7aa"/>
+</svg>

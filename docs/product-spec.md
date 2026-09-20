@@ -10,7 +10,7 @@
 
 macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 列出 / 删除真实 `git worktree`；每个 worktree 一个
-内嵌通用终端和一块只读 diff；重编辑用外部 Cursor。
+内嵌通用终端；重编辑用外部 Cursor。
 
 ## 2. 范围
 
@@ -27,7 +27,6 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
   删除对应 git 分支。
 - 新建工作树的起始分支只列本地分支。
 - 每 Worktree 一个内嵌 PTY，cwd 为该树根目录。
-- 相对创建时记录的 start-from，展示只读 diff。
 - 「在 Cursor 中打开」「在访达中显示」。
 - 应用重启后恢复 Project / Worktree 列表（对账磁盘）。
 - 固定默认 worktree 路径（实现常量，无配置 UI）。
@@ -58,12 +57,14 @@ macOS 上的 Worktree 编排台：登记本地 git 仓，创建 /
 - 不配置、不打包 Windows 或 Linux 目标。
 - 依赖本机 `git` 在 PATH 中可用。缺少则在添加项目时
   明确报错，不内嵌 git 二进制。
-- 终端：xterm.js + Rust `portable-pty`。登录壳（优先
+- 终端：xterm.js + 独立 terminal-daemon（Rust
+  `portable-pty`）。登录壳（优先
   `$SHELL`，否则 `/bin/zsh`）。继承登录环境，便于
   用户自己敲 `claude` 等命令。应用不改 argv。
 - 文件访问：用户选出的主仓、默认 worktrees 目录。
   用系统文件夹选择器添加项目。
-- 关应用或删 Worktree 时结束对应 PTY，避免孤儿进程。
+- 删除 Worktree 或用户明确关闭终端时结束对应 PTY；应用退出只断开
+  daemon 客户端，保留会话进程。
 - 独立实现。禁止把 Orca 仓库当依赖或拷贝其源码。
   （未明确回复，按默认）
 - 已定技术栈：Tauri 2（只 macOS）；前端 React +
@@ -202,21 +203,10 @@ MVP 无设置页。
 - 进程退出后主区显示「终端已结束」和按钮
   「重新打开终端」。
 
-应用退出时杀掉全部 PTY。下次不恢复终端历史。
+应用退出时只断开 terminal-daemon，不主动结束 PTY。下次启动时按稳定
+session ID 重新 attach，优先恢复仍存活的 shell 和终端输出。
 
-### 7.4 只读 diff
-
-对当前 Worktree 在其 `path` 下执行：
-
-```text
-git diff <startFrom>
-```
-
-展示纯文本 unified diff。无文件可为空态
-「与起始分支没有差异」。不支持暂存、hunk 选择、
-写评论。刷新：切回该树或点「刷新差异」。
-
-### 7.5 在 Cursor 中打开
+### 7.4 在 Cursor 中打开
 
 对当前路径：
 
@@ -285,7 +275,7 @@ worktree，先提示去删除或保留（保留则只取消登记）。
 7. Cursor 已安装时「在 Cursor 中打开」打开该路径。
 8. 删除工作树后目录消失。确认时未选择删分支则本地
     分支仍在；选择了则对应分支也被删除。
-9. 退出再打开，项目与仍存在的工作树还在。
+9. 退出再打开，项目与仍存在的工作树还在，终端会话可重新 attach。
 10. UI 可见文案为中文。
 11. 无设置项可改 worktree 根目录；无 Agent 名单。
 12. 添加含已有 worktree 的仓时，出现勾选导入列表。

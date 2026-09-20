@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -58,14 +59,36 @@ impl Store {
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
+        let listed_by_project: HashMap<String, Vec<_>> = self
+            .projects
+            .iter()
+            .filter_map(|project| {
+                let root = PathBuf::from(&project.root_path);
+                root.exists()
+                    .then(|| worktree_list(&root).ok())
+                    .flatten()
+                    .map(|listed| (project.id.clone(), listed))
+            })
+            .collect();
+
         let projects = self
             .projects
             .iter()
             .map(|project| {
                 let root = PathBuf::from(&project.root_path);
+                let main_branch = listed_by_project
+                    .get(&project.id)
+                    .map(|listed| {
+                        listed
+                            .iter()
+                            .find(|item| same_path(&item.path, &root))
+                            .and_then(|item| item.branch.clone())
+                    })
+                    .unwrap_or_else(|| Some(project.default_branch.clone()));
                 ProjectView {
                     project: project.clone(),
                     path_missing: !root.exists(),
+                    main_branch,
                 }
             })
             .collect();
@@ -80,12 +103,14 @@ impl Store {
                     .find(|item| item.id == worktree.project_id);
                 let missing = match project {
                     Some(project) if PathBuf::from(&project.root_path).exists() => {
-                        match worktree_list(Path::new(&project.root_path)) {
-                            Ok(listed) => !listed
-                                .iter()
-                                .any(|item| same_path(&item.path, Path::new(&worktree.path))),
-                            Err(_) => !PathBuf::from(&worktree.path).exists(),
-                        }
+                        listed_by_project
+                            .get(&project.id)
+                            .map(|listed| {
+                                !listed
+                                    .iter()
+                                    .any(|item| same_path(&item.path, Path::new(&worktree.path)))
+                            })
+                            .unwrap_or_else(|| !PathBuf::from(&worktree.path).exists())
                     }
                     _ => !PathBuf::from(&worktree.path).exists(),
                 };

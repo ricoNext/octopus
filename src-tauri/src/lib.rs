@@ -6,8 +6,6 @@ mod pty;
 mod store;
 mod workspace;
 
-use tauri::Manager;
-use tauri::RunEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_snapshot,
             commands::inspect_repo,
+            commands::default_worktree_parent,
             commands::add_project,
             commands::create_worktree,
             commands::retry_worktree,
@@ -27,21 +26,19 @@ pub fn run() {
             commands::remove_missing_worktree,
             commands::remove_project,
             commands::list_local_branches,
-            commands::get_diff,
             commands::open_in_cursor,
             commands::reveal_in_finder,
             commands::pty_open,
+            commands::pty_detach,
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
         ])
         .build(tauri::generate_context!())
         .expect("启动应用失败")
-        .run(|app, event| {
-            if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-                if let Some(state) = app.try_state::<commands::AppState>() {
-                    state.ptys.kill_all();
-                }
-            }
-        });
+        .run(|_, _| {});
+}
+
+pub fn run_terminal_daemon() {
+    pty::run_terminal_daemon();
 }
