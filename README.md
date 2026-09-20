@@ -96,9 +96,11 @@ bun run release -- patch
 `main` 分支即可触发 GitHub Actions。
 
 合并到 `main` 后，`.github/workflows/build-macos.yml` 会在 macOS runner 上安装
-Bun 和 Rust，构建 Tauri 的 `.dmg` 与 `.app`，并将它们作为 Actions 构件上传。该
-工作流默认生成未签名安装包；如果需要分发给其他用户，还需要补充 Apple Developer
-签名和公证所需的仓库密钥。
+Bun 和 Rust，构建 Tauri 的 `.dmg` 与 `.app`。如果本次提交确实包含版本号更新，
+工作流还会创建对应的 `vX.Y.Z` tag、GitHub Release，并把 `.dmg` 作为 Release 附件
+上传；普通代码合并只构建并上传 Actions 构件，不会重复创建 Release。该工作流默认
+生成未签名安装包；如果需要分发给其他用户，还需要补充 Apple Developer 签名和公证
+所需的仓库密钥。
 
 ## 工作树路径规则
 

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: macos-build-${{ github.ref }}
@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 安装 Bun
         uses: oven-sh/setup-bun@v2
@@ -29,6 +31,28 @@ jobs:
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: 读取应用版本
+        id: version
+        shell: bash
+        run: echo "version=$(node -p \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version\")" >> "$GITHUB_OUTPUT"
+
+      - name: 判断是否创建 Release
+        id: release_check
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          if ! git rev-parse HEAD^ >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files=$(git diff --unified=0 HEAD^ HEAD -- package.json)
+          if printf '%s\n' "$changed_files" | grep -Eq '^[+-][[:space:]]*"version"[[:space:]]*:'; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 安装前端依赖
         run: bun install --frozen-lockfile
@@ -44,3 +68,25 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.app
+
+      - name: 提取 Release 说明
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v version="$VERSION" '
+            index($0, "## [" version "]") == 1 { found=1 }
+            found && index($0, "## [") == 1 && index($0, "## [" version "]") != 1 { exit }
+            found { print }
+          ' changelog.md > release-notes.md
+
+      - name: 创建 GitHub Release
+        if: steps.release_check.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: octopus v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: src-tauri/target/release/bundle/dmg/*.dmg
+          fail_on_unmatched_files: true
