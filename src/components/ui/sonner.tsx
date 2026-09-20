@@ -1,12 +1,25 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <Sonner
-      theme="dark"
+      theme={theme}
       className="toaster group"
       icons={{
         success: (

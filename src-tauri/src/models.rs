@@ -31,7 +31,8 @@ pub struct Worktree {
     pub project_id: String,
     pub display_name: String,
     pub branch_name: String,
-    pub start_from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_from: Option<String>,
     pub path: String,
     pub origin: WorktreeOrigin,
     pub status: WorktreeStatus,
@@ -45,6 +46,7 @@ pub struct ProjectView {
     #[serde(flatten)]
     pub project: Project,
     pub path_missing: bool,
+    pub main_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,13 +89,6 @@ pub struct InspectResult {
     pub default_branch: String,
     pub used_fallback_default_branch: bool,
     pub existing_worktrees: Vec<ExistingWorktree>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiffResult {
-    pub text: String,
-    pub empty: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -6,6 +6,7 @@ export type Project = {
   name: string;
   rootPath: string;
   defaultBranch: string;
+  mainBranch: string | null;
   pathMissing: boolean;
 };
 
@@ -14,7 +15,7 @@ export type Worktree = {
   projectId: string;
   displayName: string;
   branchName: string;
-  startFrom: string;
+  startFrom: string | null;
   path: string;
   origin: WorktreeOrigin;
   status: WorktreeStatus;
@@ -39,11 +40,6 @@ export type InspectResult = {
   defaultBranch: string;
   usedFallbackDefaultBranch: boolean;
   existingWorktrees: ExistingWorktree[];
-};
-
-export type DiffResult = {
-  text: string;
-  empty: boolean;
 };
 
 export type MutationResult = {

@@ -49,6 +49,8 @@
 }
 
 :root {
+    /* macOS traffic lights sit over the webview when the title bar is an overlay. */
+    --mac-traffic-lights-width: 80px;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
@@ -134,4 +136,31 @@
 .xterm,
 .xterm-viewport {
   height: 100%;
+}
+
+.titlebar-traffic-light-pad {
+  width: var(--mac-traffic-lights-width);
+  flex: 0 0 var(--mac-traffic-lights-width);
+}
+
+.tabs-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.tabs-scrollbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.tabs-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
 }

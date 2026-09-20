@@ -3,11 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSnapshot,
   DeleteResult,
-  DiffResult,
   InspectResult,
   MutationResult,
   RemoveProjectResult,
 } from "@/types";
+
+export type TerminalAttachResult = {
+  sessionId: string;
+  isNew: boolean;
+  recovery: "warm" | "cold" | "fresh";
+  scrollbackAnsi: string;
+  cols: number;
+  rows: number;
+  cwd: string;
+};
 
 export function invokeError(error: unknown): string {
   if (typeof error === "string") {
@@ -25,19 +34,21 @@ export function invokeError(error: unknown): string {
 export const api = {
   loadSnapshot: () => invoke<AppSnapshot>("load_snapshot"),
   inspectRepo: (path: string) => invoke<InspectResult>("inspect_repo", { path }),
+  defaultWorktreeParent: (projectId: string) =>
+    invoke<string>("default_worktree_parent", { projectId }),
   addProject: (path: string, importPaths: string[]) =>
     invoke<MutationResult>("add_project", { path, importPaths }),
   createWorktree: (
     projectId: string,
     displayName: string,
-    branchName: string | null,
     startFrom: string | null,
+    parentPath: string | null,
   ) =>
     invoke<MutationResult>("create_worktree", {
       projectId,
       displayName,
-      branchName,
       startFrom,
+      parentPath,
     }),
   retryWorktree: (worktreeId: string) =>
     invoke<MutationResult>("retry_worktree", { worktreeId }),
@@ -51,14 +62,14 @@ export const api = {
     invoke<RemoveProjectResult>("remove_project", { projectId, forget }),
   listLocalBranches: (projectId: string) =>
     invoke<string[]>("list_local_branches", { projectId }),
-  getDiff: (worktreeId: string) => invoke<DiffResult>("get_diff", { worktreeId }),
   openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
-  ptyOpen: (worktreeId: string, cols: number, rows: number) =>
-    invoke<boolean>("pty_open", { worktreeId, cols, rows }),
-  ptyWrite: (worktreeId: string, data: string) =>
-    invoke<void>("pty_write", { worktreeId, data }),
-  ptyResize: (worktreeId: string, cols: number, rows: number) =>
-    invoke<void>("pty_resize", { worktreeId, cols, rows }),
-  ptyKill: (worktreeId: string) => invoke<void>("pty_kill", { worktreeId }),
+  ptyOpen: (sessionId: string, cwdId: string, cols: number, rows: number) =>
+    invoke<TerminalAttachResult>("pty_open", { sessionId, cwdId, cols, rows }),
+  ptyDetach: (sessionId: string) => invoke<void>("pty_detach", { sessionId }),
+  ptyWrite: (sessionId: string, data: string) =>
+    invoke<void>("pty_write", { sessionId, data }),
+  ptyResize: (sessionId: string, cols: number, rows: number) =>
+    invoke<void>("pty_resize", { sessionId, cols, rows }),
+  ptyKill: (sessionId: string) => invoke<void>("pty_kill", { sessionId }),
 };

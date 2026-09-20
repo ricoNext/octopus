@@ -10,10 +10,10 @@ use crate::git::{
     local_branches, prefer_stderr, same_path, show_toplevel, worktree_list,
 };
 use crate::models::{
-    DeleteResult, DiffResult, InspectResult, Project, RemoveProjectResult, Store, Worktree,
+    DeleteResult, InspectResult, Project, RemoveProjectResult, Store, Worktree,
     WorktreeOrigin, WorktreeStatus,
 };
-use crate::paths::{slugify, worktree_dest};
+use crate::paths::{default_worktree_parent, worktree_dest};
 
 pub fn inspect_repo(store: &Store, raw_path: &str) -> Result<InspectResult, String> {
     git_ok(None, &["--version"]).map_err(|_| "未找到 git，请确认已安装并在 PATH 中。".to_string())?;
@@ -78,7 +78,7 @@ pub fn add_project(
             project_id: project_id.clone(),
             display_name: crate::git::display_name_from_path(&canon),
             branch_name,
-            start_from: inspect.default_branch.clone(),
+            start_from: None,
             path: canon.to_string_lossy().to_string(),
             origin: WorktreeOrigin::Imported,
             status: WorktreeStatus::Ready,
@@ -95,6 +95,17 @@ pub fn add_project(
     Ok(project_id)
 }
 
+pub fn default_worktree_parent_for_project(store: &Store, project_id: &str) -> Result<String, String> {
+    let project = store
+        .projects
+        .iter()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "找不到该项目".to_string())?;
+    Ok(default_worktree_parent(Path::new(&project.root_path))
+        .to_string_lossy()
+        .to_string())
+}
+
 pub enum CreateOutcome {
     Ready(String),
     Failed { id: String, stderr: String },
@@ -104,12 +115,15 @@ pub fn create_worktree(
     store: &mut Store,
     project_id: &str,
     display_name: String,
-    branch_name: Option<String>,
     start_from: Option<String>,
+    parent_path: Option<String>,
 ) -> Result<CreateOutcome, String> {
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         return Err("显示名不能为空".into());
+    }
+    if !is_valid_branch_name(&display_name) {
+        return Err("显示名只能包含英文字母、数字、/、-、_ 和 .，且不能包含非法路径片段".into());
     }
     let project = store
         .projects
@@ -122,18 +136,20 @@ pub fn create_worktree(
         return Err("路径丢失".into());
     }
 
-    let slug = slugify(&display_name);
-    let dest = worktree_dest(&root, &slug);
+    let parent = parent_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_worktree_parent(&root));
+    if parent.as_os_str().is_empty() {
+        return Err("工作树目录不能为空".into());
+    }
+    let branch = display_name.clone();
+    let dest = worktree_dest(&parent, &display_name);
     if dest.exists() {
         return Err(format!(
             "目标路径已存在，创建失败：{}",
             dest.to_string_lossy()
         ));
     }
-    let branch = branch_name
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| slug.clone());
     let start = start_from
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -154,7 +170,7 @@ pub fn create_worktree(
         project_id: project.id.clone(),
         display_name,
         branch_name: branch.clone(),
-        start_from: start.clone(),
+        start_from: Some(start.clone()),
         path: dest.to_string_lossy().to_string(),
         origin: WorktreeOrigin::App,
         status: WorktreeStatus::Creating,
@@ -217,9 +233,24 @@ pub fn retry_worktree(store: &mut Store, worktree_id: &str) -> Result<CreateOutc
         store,
         &current.project_id,
         current.display_name,
-        Some(current.branch_name),
-        Some(current.start_from),
+        current.start_from,
+        Path::new(&current.path)
+            .parent()
+            .map(|path| path.to_string_lossy().to_string()),
     )
+}
+
+fn is_valid_branch_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/'))
+        && !value.starts_with('.')
+        && !value.ends_with('.')
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.contains("..")
+        && !value.contains("//")
 }
 
 fn cleanup_worktree_dir(store: &Store, current: &Worktree) {
@@ -339,26 +370,6 @@ pub fn remove_project(
     })
 }
 
-pub fn get_diff(store: &Store, worktree_id: &str) -> Result<DiffResult, String> {
-    let worktree = store
-        .worktrees
-        .iter()
-        .find(|item| item.id == worktree_id)
-        .ok_or_else(|| "找不到该工作树".to_string())?;
-    let path = Path::new(&worktree.path);
-    if !path.exists() {
-        return Err("工作树目录不存在".into());
-    }
-    let out = git(Some(path), &["diff", &worktree.start_from])?;
-    if !out.success {
-        return Err(prefer_stderr(&out));
-    }
-    Ok(DiffResult {
-        empty: out.stdout.is_empty(),
-        text: out.stdout,
-    })
-}
-
 pub fn list_branches(store: &Store, project_id: &str) -> Result<Vec<String>, String> {
     let project = store
         .projects
@@ -405,16 +416,20 @@ pub fn reveal_in_finder(path: &str) -> Result<(), String> {
     }
 }
 
-pub fn worktree_cwd<'a>(store: &'a Store, worktree_id: &str) -> Result<&'a str, String> {
-    let worktree = store
-        .worktrees
-        .iter()
-        .find(|item| item.id == worktree_id)
-        .ok_or_else(|| "找不到该工作树".to_string())?;
-    if worktree.status != WorktreeStatus::Ready {
-        return Err("工作树尚未就绪".into());
+pub fn session_cwd<'a>(store: &'a Store, session_id: &str) -> Result<&'a str, String> {
+    if let Some(worktree) = store.worktrees.iter().find(|item| item.id == session_id) {
+        if worktree.status != WorktreeStatus::Ready {
+            return Err("工作树尚未就绪".into());
+        }
+        return Ok(worktree.path.as_str());
     }
-    Ok(worktree.path.as_str())
+    if let Some(project) = store.projects.iter().find(|item| item.id == session_id) {
+        if !Path::new(&project.root_path).exists() {
+            return Err("路径丢失".into());
+        }
+        return Ok(project.root_path.as_str());
+    }
+    Err("找不到该工作树".into())
 }
 
 #[cfg(test)]
@@ -474,26 +489,23 @@ mod tests {
         assert!(inspect.existing_worktrees.is_empty());
         add_project(&mut store, repo.to_str().unwrap(), Vec::new()).unwrap();
         let project_id = store.projects[0].id.clone();
+        let parent = tmp.path().join("worktrees");
         let CreateOutcome::Ready(wt_id) = create_worktree(
             &mut store,
             &project_id,
-            "修登录".into(),
+            "fix-login".into(),
             None,
-            None,
+            Some(parent.to_string_lossy().to_string()),
         )
         .unwrap() else {
             panic!("expected ready worktree");
         };
-        let dest = worktree_dest(&repo, "修登录");
+        let dest = worktree_dest(&parent, "fix-login");
         assert!(dest.is_dir());
         assert_eq!(store.worktrees[0].id, wt_id);
         assert_eq!(store.worktrees[0].status, WorktreeStatus::Ready);
 
         fs::write(dest.join("README"), "changed\n").unwrap();
-        let diff = get_diff(&store, &wt_id).unwrap();
-        assert!(!diff.empty);
-        assert!(diff.text.contains("changed"));
-
         match delete_worktree(&mut store, &wt_id, false, false).unwrap() {
             DeleteResult::NeedsForce { stderr } => {
                 assert!(stderr.contains("--force") || stderr.contains("modified"));
@@ -506,19 +518,19 @@ mod tests {
         }
         assert!(!dest.exists());
         let branches = local_branches(&repo).unwrap();
-        assert!(!branches.iter().any(|item| item == "修登录"));
+        assert!(!branches.iter().any(|item| item == "fix-login"));
 
         let CreateOutcome::Ready(keep_id) = create_worktree(
             &mut store,
             &project_id,
             "keep-branch".into(),
             None,
-            None,
+            Some(parent.to_string_lossy().to_string()),
         )
         .unwrap() else {
             panic!("expected ready worktree");
         };
-        let keep_dest = worktree_dest(&repo, "keep-branch");
+        let keep_dest = worktree_dest(&parent, "keep-branch");
         match delete_worktree(&mut store, &keep_id, false, false).unwrap() {
             DeleteResult::Ok { .. } => {}
             DeleteResult::NeedsForce { stderr } => panic!("{stderr}"),
@@ -572,5 +584,18 @@ mod tests {
             .unwrap();
         let log_text = String::from_utf8_lossy(&fetch_log.stdout);
         assert!(!log_text.contains("fetch"));
+    }
+
+    #[test]
+    fn session_cwd_uses_project_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("acme");
+        init_repo(&repo);
+        let mut store = Store::default();
+        add_project(&mut store, repo.to_str().unwrap(), Vec::new()).unwrap();
+        let project_id = store.projects[0].id.clone();
+        let cwd = session_cwd(&store, &project_id).unwrap();
+        assert_eq!(Path::new(cwd), repo.canonicalize().unwrap());
+        assert!(session_cwd(&store, "missing").is_err());
     }
 }
