@@ -81,6 +81,25 @@ bun run preview
 bun run tauri --help
 ```
 
+## 发布流程
+
+发布前请确认工作区干净，并在当前分支执行版本发布命令：
+
+```bash
+# 自动递增 patch 版本，也支持 minor、major 或完整版本号（例如 1.2.3）
+bun run release -- patch
+```
+
+该命令会同步更新 `package.json`、`src-tauri/tauri.conf.json`、
+`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock` 的版本号，在 `changelog.md` 顶部生成本次变更记录，
+然后创建发布提交并推送当前分支到 `origin`。推送后创建 Pull Request，合并到
+`main` 分支即可触发 GitHub Actions。
+
+合并到 `main` 后，`.github/workflows/build-macos.yml` 会在 macOS runner 上安装
+Bun 和 Rust，构建 Tauri 的 `.dmg` 与 `.app`，并将它们作为 Actions 构件上传。该
+工作流默认生成未签名安装包；如果需要分发给其他用户，还需要补充 Apple Developer
+签名和公证所需的仓库密钥。
+
 ## 工作树路径规则
 
 新建工作树时，默认父目录为：
