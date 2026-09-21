@@ -42,6 +42,14 @@ jobs:
           printf 'tauri updater signing preflight\n' > "$test_file"
           bun tauri signer sign "$test_file"
 
+      # tauri-action@v0 在 macOS 上会替换构建子进程的环境变量，
+      # 因此把密钥临时写入工作区，由构建包装脚本重新导出。
+      - name: 准备 Tauri 签名文件
+        run: |
+          umask 077
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > .tauri-signing-private-key
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" > .tauri-signing-private-key-password
+
       # 从 changelog.md 提取最顶部的版本段落作为 Release 说明，
       # tauri-action 会把它写入 latest.json 的 notes，应用内更新弹窗据此展示更新内容。
       - name: 提取更新说明
@@ -58,8 +66,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: bash scripts/tauri-build-with-signing.sh
           tagName: ${{ github.ref_name }}
           releaseName: octopus ${{ github.ref_name }}
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: false
           prerelease: false
+
+      - name: 清理 Tauri 签名文件
+        if: ${{ always() }}
+        run: rm -f .tauri-signing-private-key .tauri-signing-private-key-password
