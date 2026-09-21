@@ -2,6 +2,15 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.8] - 2026-09-21
+
+### 变更
+- chore(docs): refine README formatting by removing unnecessary link and adjusting logo alignment (ddcc0f4)
+- chore(docs): update README with new logo and improve formatting (9980294)
+- chore(docs): enhance README formatting and emphasize application name (067711e)
+- fix(updater): correct formatting of public key in tauri configuration (c05af70)
+- chore(docs): update README to reflect supported platform changes and remove unnecessary badges (0948c64)
+
 ## [0.1.7] - 2026-09-21
 
 ### 变更
