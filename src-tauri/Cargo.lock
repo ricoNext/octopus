@@ -2286,7 +2286,7 @@ dependencies = [
 
 [[package]]
 name = "octopus"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "portable-pty",
  "serde",

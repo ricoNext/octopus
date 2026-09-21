@@ -2,6 +2,11 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.11] - 2026-09-21
+
+### 变更
+- chore(release): ensure environment variables for Tauri signing are set at job level (2279d3a)
+
 ## [0.1.10] - 2026-09-21
 
 ### 变更
