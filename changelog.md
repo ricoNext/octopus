@@ -2,6 +2,12 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.6] - 2026-09-21
+
+### 变更
+- fix(updater): update public key for the updater plugin in tauri configuration (1cd7abe)
+- feat(updater): 应用内版本更新能力 (8916313)
+
 ## [0.1.5] - 2026-09-21
 
 ### 变更
