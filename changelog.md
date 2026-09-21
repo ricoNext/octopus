@@ -2,6 +2,12 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.9] - 2026-09-21
+
+### 变更
+- chore(release): remove unused TAURI_SIGNING_PRIVATE_KEY_PASSWORD from release workflow (08623a3)
+- chore(cleanup): remove unused slugify functions and dependencies from paths.rs, update .gitignore to include .workbuddy directory (d644217)
+
 ## [0.1.8] - 2026-09-21
 
 ### 变更
