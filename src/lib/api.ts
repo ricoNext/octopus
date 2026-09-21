@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AppSnapshot,
+  BranchOptions,
   DeleteResult,
   InspectResult,
   MutationResult,
@@ -62,6 +63,10 @@ export const api = {
     invoke<RemoveProjectResult>("remove_project", { projectId, forget }),
   listLocalBranches: (projectId: string) =>
     invoke<string[]>("list_local_branches", { projectId }),
+  listBranchOptions: (projectId: string) =>
+    invoke<BranchOptions>("list_branch_options", { projectId }),
+  switchMainBranch: (projectId: string, branch: string) =>
+    invoke<void>("switch_main_branch", { projectId, branch }),
   openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
   ptyOpen: (sessionId: string, cwdId: string, cols: number, rows: number) =>
