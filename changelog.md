@@ -2,6 +2,11 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.5] - 2026-09-21
+
+### 变更
+- refactor(build): simplify version retrieval in macOS workflow by removing redundant step (205fd8c)
+
 ## [0.1.4] - 2026-09-21
 
 ### 变更
