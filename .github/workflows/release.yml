@@ -23,6 +23,16 @@ jobs:
       - name: 安装依赖
         run: bun install
 
+      # 提前校验签名私钥，避免完整构建跑完才因缺 Secret 失败。
+      - name: 校验签名私钥
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY 未配置。请到仓库 Settings → Secrets and variables → Actions 添加，值为 tauri signer generate 生成的私钥文件（如 ~/.tauri/octopus.key）的完整内容；如生成时设置过密码，还需添加 TAURI_SIGNING_PRIVATE_KEY_PASSWORD。"
+            exit 1
+          fi
+
       # 从 changelog.md 提取最顶部的版本段落作为 Release 说明，
       # tauri-action 会把它写入 latest.json 的 notes，应用内更新弹窗据此展示更新内容。
       - name: 提取更新说明
