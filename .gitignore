@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Tauri updater signing keys (never commit)
+.tauri-signing-private-key
+.tauri-signing-private-key-password
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

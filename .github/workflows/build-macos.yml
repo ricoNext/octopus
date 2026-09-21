@@ -1,13 +1,10 @@
 name: 构建 macOS 安装包
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: macos-build-${{ github.ref }}
@@ -17,6 +14,11 @@ jobs:
   build:
     name: 构建 macOS DMG
     runs-on: macos-14
+    # Tauri updater 在生成 .app.tar.gz 时会从当前构建进程读取签名私钥。
+    # 该工作流直接运行 bun，因此必须在 job/step 环境中显式注入这两个 Secret。
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
     steps:
       - name: 拉取代码
@@ -32,20 +34,20 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 校验发布标签与应用版本
-        if: github.ref_type == 'tag'
+      - name: 安装前端依赖
+        run: bun install --frozen-lockfile
+
+      - name: 校验 Tauri 签名私钥
         shell: bash
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "v$VERSION" ]; then
-            echo "标签 $TAG 与 package.json 中的版本 $VERSION 不一致" >&2
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 未注入当前 job。请确认它是 Settings → Secrets and variables → Actions 下的 Repository secret。"
             exit 1
           fi
 
-      - name: 安装前端依赖
-        run: bun install --frozen-lockfile
+          test_file="$RUNNER_TEMP/tauri-signing-preflight.txt"
+          printf 'tauri updater signing preflight\n' > "$test_file"
+          bun tauri signer sign "$test_file"
 
       - name: 构建 Tauri 安装包
         run: bun run tauri build
@@ -58,24 +60,3 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.app
-
-      - name: 提取 Release 说明
-        if: github.ref_type == 'tag'
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          awk -v version="$VERSION" '
-            index($0, "## [" version "]") == 1 { found=1 }
-            found && index($0, "## [") == 1 && index($0, "## [" version "]") != 1 { exit }
-            found { print }
-          ' changelog.md > release-notes.md
-
-      - name: 创建 GitHub Release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: octopus ${{ github.ref_name }}
-          body_path: release-notes.md
-          files: src-tauri/target/release/bundle/dmg/*.dmg
-          fail_on_unmatched_files: true
