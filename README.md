@@ -5,7 +5,7 @@
     alt="octopus"
     width="284"
     height="284">
-  </a> octopus
+  </a>
 </h1>
 
 
@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/macOS-4493F8?style=flat-square" alt="Supported platform: macOS" />
 </p>
 
-octopus 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复的内嵌终端。
+**octopus** 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复的内嵌终端。
 
 ![](https://neptune-ipc.oss-cn-shenzhen.aliyuncs.com/img/20260921135740826.png)
 
