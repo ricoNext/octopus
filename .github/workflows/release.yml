@@ -1,0 +1,48 @@
+name: Release
+
+# release.ts 打 tag 推送后触发：构建 dmg、生成 latest.json 并发布到 GitHub Releases。
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: 安装依赖
+        run: bun install
+
+      # 从 changelog.md 提取最顶部的版本段落作为 Release 说明，
+      # tauri-action 会把它写入 latest.json 的 notes，应用内更新弹窗据此展示更新内容。
+      - name: 提取更新说明
+        id: changelog
+        run: |
+          {
+            echo 'body<<CHANGELOG_EOF'
+            awk '/^## \[/{if (found) exit; found=1} found{print}' changelog.md
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 构建并发布
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: octopus ${{ github.ref_name }}
+          releaseBody: ${{ steps.changelog.outputs.body }}
+          releaseDraft: false
+          prerelease: false
