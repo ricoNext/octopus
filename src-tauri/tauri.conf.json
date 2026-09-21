@@ -31,7 +31,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYyRkY5RjI0QTFCM0RBNjAKUldSZzJyT2hKSi8vOGdiZm56SnE2SzUxNUlhWjZZVHBVVXZ0Q0hGekNMMjBMT1FVV1hzTlpHLzcK%",
       "endpoints": [
         "https://github.com/ricoNext/octopus/releases/latest/download/latest.json"
       ]
