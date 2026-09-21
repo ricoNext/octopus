@@ -31,7 +31,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYyRkY5RjI0QTFCM0RBNjAKUldSZzJyT2hKSi8vOGdiZm56SnE2SzUxNUlhWjZZVHBVVXZ0Q0hGekNMMjBMT1FVV1hzTlpHLzcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQyODRDNDA5MEE3N0RDREEKUldUYTNIY0tDY1NFMGlXQ1lubENOdFBrUWwyMk4rSHVTckJ6eXR1WFAwaTUyS2RybEFIVlJFTksK",
       "endpoints": [
         "https://github.com/ricoNext/octopus/releases/latest/download/latest.json"
       ]
