@@ -1,11 +1,11 @@
 <h1 align="center">
-  <a href="https://github.com/ricoNext/octopus">
   <img
     src="https://neptune-ipc.oss-cn-shenzhen.aliyuncs.com/img/20260921162734301.png"
     alt="octopus"
     width="64"
+    valign="middle"
     height="64">
-  </a> octopus
+  octopus
 </h1>
 
 <p align="center">
