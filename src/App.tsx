@@ -16,6 +16,8 @@ import {
   MoonIcon,
   SunIcon,
   Code2Icon,
+  InfoIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
@@ -23,6 +25,7 @@ import { toast } from "sonner";
 import { CopyableError } from "@/components/CopyableError";
 import { Sidebar } from "@/components/Sidebar";
 import { TerminalPane } from "@/components/TerminalPane";
+import { UpdateDialog } from "@/components/UpdateDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,6 +57,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, invokeError } from "@/lib/api";
+import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
@@ -237,6 +241,7 @@ function startWindowDrag(event: MouseEvent<HTMLElement>) {
 
 export default function App() {
   const persistedState = useMemo(readPersistedTerminalState, []);
+  const updater = useAppUpdater();
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
   const [selection, setSelection] = useState<Selection>(persistedState.selection ?? { kind: "empty" });
   const [visited, setVisited] = useState<string[]>([]);
@@ -299,6 +304,13 @@ export default function App() {
     mediaQuery.addEventListener("change", handleSystemThemeChange);
     return () => mediaQuery.removeEventListener("change", handleSystemThemeChange);
   }, [themePreference]);
+
+  // 启动后延迟静默检查更新，避免抢占启动资源；失败时静默跳过。
+  useEffect(() => {
+    const timer = window.setTimeout(() => void updater.check("silent"), 4000);
+    return () => window.clearTimeout(timer);
+    // 只在挂载时检查一次；updater.check 是稳定引用。
+  }, []);
 
   useEffect(() => {
     try {
@@ -994,11 +1006,14 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         {view === "settings" ? (
           <SettingsPage
-            onBack={() => setView("workspace")}
+            onBack={() => setView("settings" === "settings" ? "workspace" : "settings")}
             themePreference={themePreference}
             onThemeChange={setThemePreference}
             defaultEditor={defaultEditor}
             onDefaultEditorChange={setDefaultEditor}
+            currentVersion={updater.currentVersion}
+            manualCheckStatus={updater.manualStatus}
+            onCheckUpdate={() => void updater.check("manual")}
           />
         ) : (
           <>
@@ -1234,6 +1249,15 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
+      <UpdateDialog
+        open={updater.dialogOpen}
+        phase={updater.phase}
+        info={updater.updateInfo}
+        error={updater.dialogError}
+        onInstall={() => void updater.install()}
+        onDismiss={updater.dismiss}
+      />
+
       <ImportDialog
         inspect={inspect}
         selected={importSelected}
@@ -1464,14 +1488,20 @@ function SettingsPage({
   onThemeChange,
   defaultEditor,
   onDefaultEditorChange,
+  currentVersion,
+  manualCheckStatus,
+  onCheckUpdate,
 }: {
   onBack: () => void;
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   defaultEditor: string;
   onDefaultEditorChange: (editor: string) => void;
+  currentVersion: string;
+  manualCheckStatus: ManualCheckStatus;
+  onCheckUpdate: () => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"appearance" | "editor">("appearance");
+  const [activeSection, setActiveSection] = useState<"appearance" | "editor" | "about">("appearance");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1524,6 +1554,20 @@ function SettingsPage({
             >
               <Code2Icon className="size-4 shrink-0" />
               <span>编辑器</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "mt-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                activeSection === "about"
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground",
+              )}
+              onClick={() => setActiveSection("about")}
+              aria-current={activeSection === "about" ? "page" : undefined}
+            >
+              <InfoIcon className="size-4 shrink-0" />
+              <span>关于与更新</span>
             </button>
           </nav>
         </aside>
@@ -1607,6 +1651,43 @@ function SettingsPage({
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     请选择已安装的编辑器。未配置时，项目菜单中的“在编辑器中打开”会被禁用。
+                  </p>
+                </div>
+              </section>
+            ) : null}
+            {activeSection === "about" ? (
+              <section className="space-y-4">
+                <div>
+                  <h2 className="text-base font-semibold">关于与更新</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    查看当前版本，手动检查是否有新版本可用。
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-card px-4 py-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">当前版本</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {currentVersion ? `octopus v${currentVersion}` : "正在读取版本号…"}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={onCheckUpdate}
+                      disabled={manualCheckStatus.kind === "checking"}
+                    >
+                      <RefreshCwIcon className={cn(manualCheckStatus.kind === "checking" && "animate-spin")} />
+                      检查更新
+                    </Button>
+                  </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {manualCheckStatus.kind === "checking"
+                      ? "正在检查更新…"
+                      : manualCheckStatus.kind === "uptodate"
+                        ? "当前已是最新版本。应用启动时也会自动检查一次。"
+                        : manualCheckStatus.kind === "error"
+                          ? `检查失败：${manualCheckStatus.message}`
+                          : "发现新版本时会弹出窗口展示更新内容，确认后才会下载安装。"}
                   </p>
                 </div>
               </section>
