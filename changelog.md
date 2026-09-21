@@ -2,6 +2,11 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.13] - 2026-09-21
+
+### 变更
+- fix(ci): inject Tauri signing secrets into macOS build workflow (4284129)
+
 ## [0.1.12] - 2026-09-21
 
 ### 变更
