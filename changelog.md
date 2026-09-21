@@ -2,6 +2,12 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.7] - 2026-09-21
+
+### 变更
+- chore(docs): update README layout and add badges for GitHub stars, downloads, license, and community links (23d4c09)
+- ci(release): 缺少签名私钥时提前失败并给出配置指引 (7549ae6)
+
 ## [0.1.6] - 2026-09-21
 
 ### 变更
