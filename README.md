@@ -11,9 +11,8 @@
 
 <p align="center">
   <a href="https://github.com/ricoNext/octopus"><img src="https://img.shields.io/github/stars/ricoNext/octopus?style=flat&amp;label=%E2%98%85&amp;color=08C" alt="GitHub stars" /></a>
-  <a href="https://github.com/ricoNext/octopus/releases"><img src="docs/assets/readme-downloads.svg" alt="Total downloads across all releases" /></a>
-  <img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-4493F8?style=flat-square" alt="Supported platforms: macOS, Windows, and Linux" />
+
+  <img src="https://img.shields.io/badge/macOS-4493F8?style=flat-square" alt="Supported platform: macOS" />
 </p>
 
 octopus 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复的内嵌终端。
