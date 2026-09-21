@@ -28,6 +28,12 @@ export type AppSnapshot = {
   worktrees: Worktree[];
 };
 
+export type BranchOptions = {
+  recent: string[];
+  local: string[];
+  remote: string[];
+};
+
 export type ExistingWorktree = {
   path: string;
   branchName?: string | null;

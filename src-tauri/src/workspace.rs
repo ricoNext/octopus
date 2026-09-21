@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::git::{
     canonicalize_or, command_v, default_branch, existing_linked_worktrees, git, git_ok,
-    local_branches, prefer_stderr, same_path, show_toplevel, worktree_list,
+    local_branches, prefer_stderr, recent_branches, remote_branches, same_path, show_toplevel,
+    worktree_list,
 };
 use crate::models::{
     DeleteResult, InspectResult, Project, RemoveProjectResult, Store, Worktree,
@@ -155,9 +156,12 @@ pub fn create_worktree(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| project.default_branch.clone());
 
-    let branches = local_branches(&root)?;
-    if !branches.iter().any(|item| item == &start) {
-        return Err(format!("起始分支不在本地分支中：{start}"));
+    let local = local_branches(&root)?;
+    let remote = remote_branches(&root)?;
+    if !local.iter().any(|item| item == &start)
+        && !remote.iter().any(|item| item == &start)
+    {
+        return Err(format!("起始分支不存在：{start}"));
     }
 
     if let Some(parent) = dest.parent() {
@@ -381,6 +385,67 @@ pub fn list_branches(store: &Store, project_id: &str) -> Result<Vec<String>, Str
         return Err("路径丢失".into());
     }
     local_branches(root)
+}
+
+pub fn list_branch_options(
+    store: &Store,
+    project_id: &str,
+) -> Result<(Vec<String>, Vec<String>, Vec<String>), String> {
+    let project = store
+        .projects
+        .iter()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "找不到该项目".to_string())?;
+    let root = Path::new(&project.root_path);
+    if !root.exists() {
+        return Err("路径丢失".into());
+    }
+    let local = local_branches(root)?;
+    let recent = recent_branches(root, &local)?;
+    let remote = remote_branches(root)?;
+    Ok((recent, local, remote))
+}
+
+pub fn switch_main_branch(store: &Store, project_id: &str, branch: &str) -> Result<(), String> {
+    let project = store
+        .projects
+        .iter()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "找不到该项目".to_string())?;
+    let root = Path::new(&project.root_path);
+    if !root.exists() {
+        return Err("路径丢失".into());
+    }
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("分支不能为空".into());
+    }
+
+    let local = local_branches(root)?;
+    let remote = remote_branches(root)?;
+    let args: Vec<String>;
+    let command_args: Vec<&str>;
+    if local.iter().any(|item| item == branch) {
+        args = vec!["switch".into(), branch.into()];
+        command_args = args.iter().map(String::as_str).collect();
+    } else if remote.iter().any(|item| item == branch) {
+        let local_name = branch.split_once('/').map(|(_, name)| name).unwrap_or(branch);
+        if local.iter().any(|item| item == local_name) {
+            args = vec!["switch".into(), local_name.into()];
+        } else {
+            args = vec!["switch".into(), "--track".into(), branch.into()];
+        }
+        command_args = args.iter().map(String::as_str).collect();
+    } else {
+        return Err(format!("分支不存在：{branch}"));
+    }
+
+    let out = git(Some(root), &command_args)?;
+    if out.success {
+        Ok(())
+    } else {
+        Err(prefer_stderr(&out))
+    }
 }
 
 pub fn open_in_cursor(path: &str) -> Result<(), String> {

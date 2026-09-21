@@ -26,6 +26,8 @@ pub fn run() {
             commands::remove_missing_worktree,
             commands::remove_project,
             commands::list_local_branches,
+            commands::list_branch_options,
+            commands::switch_main_branch,
             commands::open_in_cursor,
             commands::reveal_in_finder,
             commands::pty_open,

@@ -234,6 +234,27 @@ pub fn list_local_branches(
 }
 
 #[tauri::command]
+pub fn list_branch_options(
+    state: State<AppState>,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    let store = locked_store(&state)?;
+    let (recent, local, remote) = workspace::list_branch_options(&store, &project_id)?;
+    Ok(serde_json::json!({ "recent": recent, "local": local, "remote": remote }))
+}
+
+#[tauri::command]
+pub fn switch_main_branch(
+    state: State<AppState>,
+    project_id: String,
+    branch: String,
+) -> Result<(), String> {
+    let store = locked_store(&state)?;
+    workspace::switch_main_branch(&store, &project_id, &branch)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn open_in_cursor(path: String) -> Result<(), String> {
     workspace::open_in_cursor(&path)
 }

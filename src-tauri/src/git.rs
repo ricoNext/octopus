@@ -180,6 +180,43 @@ pub fn local_branches(repo: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+pub fn remote_branches(repo: &Path) -> Result<Vec<String>, String> {
+    let stdout = git_ok(
+        Some(repo),
+        &["branch", "--remotes", "--format=%(refname:short)"],
+    )?;
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.ends_with("/HEAD"))
+        .map(ToString::to_string)
+        .collect())
+}
+
+pub fn recent_branches(repo: &Path, local: &[String]) -> Result<Vec<String>, String> {
+    let out = git(Some(repo), &["reflog", "--format=%gs", "-n", "50", "HEAD"])?;
+    if !out.success {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    for line in out.stdout.lines() {
+        let Some((_, target)) = line.rsplit_once(" to ") else {
+            continue;
+        };
+        let target = target.trim();
+        if local.iter().any(|item| item == target) && !result.iter().any(|item| item == target) {
+            result.push(target.to_string());
+        }
+    }
+    if let Ok(current) = git_ok(Some(repo), &["branch", "--show-current"]) {
+        let current = current.trim();
+        if local.iter().any(|item| item == current) && !result.iter().any(|item| item == current) {
+            result.insert(0, current.to_string());
+        }
+    }
+    Ok(result)
+}
+
 pub fn default_branch(repo: &Path) -> (String, bool) {
     if let Ok(sym) = git_ok(Some(repo), &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
         let name = sym

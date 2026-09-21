@@ -208,6 +208,9 @@ export default function App() {
   );
   const [stateHydrated, setStateHydrated] = useState(false);
   const activeTabElementRef = useRef<HTMLDivElement | null>(null);
+  const tabsViewportRef = useRef<HTMLDivElement | null>(null);
+  const tabsContentRef = useRef<HTMLDivElement | null>(null);
+  const [tabsOverflowing, setTabsOverflowing] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenu | null>(null);
   const [renameTabTarget, setRenameTabTarget] = useState<RenameTabTarget | null>(null);
   const [renameTabValue, setRenameTabValue] = useState("");
@@ -320,6 +323,27 @@ export default function App() {
   const activeTabId = selectedContextId
     ? activeTabByContext[selectedContextId] ?? selectedTabs[0]?.id
     : undefined;
+
+  useEffect(() => {
+    const viewport = tabsViewportRef.current;
+    const content = tabsContentRef.current;
+    if (!viewport || !content) {
+      return;
+    }
+
+    const updateOverflow = () => {
+      setTabsOverflowing(viewport.scrollWidth > viewport.clientWidth + 1);
+    };
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(viewport);
+    observer.observe(content);
+    updateOverflow();
+    window.addEventListener("resize", updateOverflow);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateOverflow);
+    };
+  }, [selectedContextId, selectedTabs.length]);
 
   const applySnapshot = useCallback((next: AppSnapshot, focusedWorktreeId?: string | null) => {
     setSnapshot(next);
@@ -584,15 +608,20 @@ export default function App() {
     }
   }
 
-  async function openCreate(projectId: string) {
+  async function openCreate(projectId: string, suggestedStartFrom?: string) {
     try {
       const branches = await api.listLocalBranches(projectId);
       const project = projects.find((item) => item.id === projectId);
       const parent = await api.defaultWorktreeParent(projectId);
-      setLocalBranches(branches);
+      const initialStartFrom = suggestedStartFrom ?? project?.defaultBranch ?? branches[0] ?? "";
+      setLocalBranches(
+        suggestedStartFrom && !branches.includes(suggestedStartFrom)
+          ? [...branches, suggestedStartFrom]
+          : branches,
+      );
       setCreateProjectId(projectId);
       setDisplayName("");
-      setStartFrom(project?.defaultBranch ?? branches[0] ?? "");
+      setStartFrom(initialStartFrom);
       setStartFromQuery("");
       setWorktreeParent(parent);
     } catch (error) {
@@ -650,6 +679,30 @@ export default function App() {
       }
     } catch (error) {
       toast.error(invokeError(error));
+    }
+  }
+
+  async function handleSwitchMainBranch(projectId: string, branch: string) {
+    const previousBranch =
+      snapshot.projects.find((project) => project.id === projectId)?.mainBranch ?? null;
+    setSnapshot((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id === projectId ? { ...project, mainBranch: branch } : project,
+      ),
+    }));
+    try {
+      await api.switchMainBranch(projectId, branch);
+    } catch (error) {
+      setSnapshot((current) => ({
+        ...current,
+        projects: current.projects.map((project) =>
+          project.id === projectId && project.mainBranch === branch
+            ? { ...project, mainBranch: previousBranch }
+            : project,
+        ),
+      }));
+      throw error;
     }
   }
 
@@ -720,6 +773,19 @@ export default function App() {
     selection.kind === "main" && selectedProject && !selectedProject.pathMissing,
   );
   const showTerminal = showWorktreeTerminal || showMainTerminal;
+  const newTerminalButton = (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className="my-1 shrink-0 bg-muted/30"
+      onClick={addTerminalTab}
+      disabled={!selectedContextId || !showTerminal}
+      aria-label="新建终端"
+      title="新建终端"
+    >
+      <PlusIcon />
+    </Button>
+  );
   const visitedReady = visited
     .map((id) => worktrees.find((item) => item.id === id))
     .filter((item): item is Worktree => Boolean(item && item.status === "ready" && !item.missing));
@@ -759,7 +825,9 @@ export default function App() {
           selection={selection}
           onSelect={selectWorkspace}
           onAddProject={() => void handleAddProject()}
-          onNewWorktree={(projectId) => void openCreate(projectId)}
+          onNewWorktree={(projectId, startFromBranch) =>
+            void openCreate(projectId, startFromBranch)
+          }
           onRemoveProject={(projectId) => void handleRemoveProject(projectId, false)}
           onDeleteWorktree={(worktreeId) => {
             const target = worktrees.find((item) => item.id === worktreeId);
@@ -781,6 +849,8 @@ export default function App() {
           }}
           onOpenCursor={(path) => void handleOpenCursor(path)}
           onRevealFinder={(path) => void handleRevealFinder(path)}
+          onListBranchOptions={(projectId) => api.listBranchOptions(projectId)}
+          onSwitchMainBranch={handleSwitchMainBranch}
           onOpenSettings={() => setView("settings")}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(true)}
@@ -880,12 +950,14 @@ export default function App() {
             style={{
               width: sidebarCollapsed
                 ? "calc(var(--mac-traffic-lights-width) + 40px)"
-                : "var(--mac-traffic-lights-width)",
+                : "0px",
             }}
             aria-hidden="true"
           />
-          <div className="tabs-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto pt-1">
-            {selectedTabs.map((tab) => {
+          <div className="flex min-w-0 flex-1 items-stretch">
+            <div ref={tabsViewportRef} className="tabs-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto pt-1">
+              <div ref={tabsContentRef} className="flex min-w-max items-end gap-1">
+              {selectedTabs.map((tab) => {
               const active = tab.id === activeTabId;
               return (
                 <div
@@ -927,7 +999,11 @@ export default function App() {
                   </button>
                 </div>
               );
-            })}
+              })}
+              {!tabsOverflowing && newTerminalButton}
+              </div>
+            </div>
+            {tabsOverflowing && newTerminalButton}
           </div>
           <DropdownMenu
             open={Boolean(tabContextMenu && contextMenuTab)}
@@ -1014,17 +1090,6 @@ export default function App() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="my-1 shrink-0"
-            onClick={addTerminalTab}
-            disabled={!selectedContextId || !showTerminal}
-            aria-label="新建终端"
-            title="新建终端"
-          >
-            <PlusIcon />
-          </Button>
             </div>
             <div className="relative min-h-0 flex-1">
           {terminalContexts.flatMap((context) =>
