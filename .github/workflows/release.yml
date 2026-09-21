@@ -11,6 +11,11 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+    # Tauri CLI 只会从构建进程的环境变量读取 updater 私钥。
+    # 放在 job 级别，确保 shell 预检和 tauri-action 使用完全相同的环境。
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,13 +30,17 @@ jobs:
 
       # 提前校验签名私钥，避免完整构建跑完才因缺 Secret 失败。
       - name: 校验签名私钥
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY 未配置。请到仓库 Settings → Secrets and variables → Actions 添加，值为 tauri signer generate 生成的私钥文件（如 ~/.tauri/octopus.key）的完整内容；如生成时设置过密码，还需添加 TAURI_SIGNING_PRIVATE_KEY_PASSWORD。"
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 未注入当前 job。请确认它是 Settings → Secrets and variables → Actions 下的 Repository secret，而不是本机文件或普通变量。"
             exit 1
           fi
+
+          # 用与正式构建完全相同的环境变量签名一个临时文件，提前验证
+          # 私钥内容和密码，而不是等完整构建结束后才失败。
+          test_file="$RUNNER_TEMP/tauri-signing-preflight.txt"
+          printf 'tauri updater signing preflight\n' > "$test_file"
+          bun tauri signer sign "$test_file"
 
       # 从 changelog.md 提取最顶部的版本段落作为 Release 说明，
       # tauri-action 会把它写入 latest.json 的 notes，应用内更新弹窗据此展示更新内容。
@@ -48,8 +57,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: octopus ${{ github.ref_name }}
