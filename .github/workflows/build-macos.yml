@@ -2,8 +2,8 @@ name: 构建 macOS 安装包
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -37,21 +37,16 @@ jobs:
         shell: bash
         run: echo "version=$(node -p \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version\")" >> "$GITHUB_OUTPUT"
 
-      - name: 判断是否创建 Release
-        id: release_check
-        if: github.event_name == 'push'
+      - name: 校验发布标签与应用版本
+        if: github.ref_type == 'tag'
         shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if ! git rev-parse HEAD^ >/dev/null 2>&1; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          changed_files=$(git diff --unified=0 HEAD^ HEAD -- package.json)
-          if printf '%s\n' "$changed_files" | grep -Eq '^[+-][[:space:]]*"version"[[:space:]]*:'; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "标签 $TAG 与 package.json 中的版本 $VERSION 不一致" >&2
+            exit 1
           fi
 
       - name: 安装前端依赖
@@ -70,7 +65,7 @@ jobs:
             src-tauri/target/release/bundle/macos/*.app
 
       - name: 提取 Release 说明
-        if: steps.release_check.outputs.should_release == 'true'
+        if: github.ref_type == 'tag'
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -82,11 +77,11 @@ jobs:
           ' changelog.md > release-notes.md
 
       - name: 创建 GitHub Release
-        if: steps.release_check.outputs.should_release == 'true'
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: octopus v${{ steps.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: octopus ${{ github.ref_name }}
           body_path: release-notes.md
           files: src-tauri/target/release/bundle/dmg/*.dmg
           fail_on_unmatched_files: true

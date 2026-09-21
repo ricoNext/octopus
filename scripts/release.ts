@@ -138,6 +138,8 @@ git([
   "changelog.md",
 ]);
 git(["commit", "-m", `chore(release): v${version}`]);
-git(["push", "--set-upstream", "origin", "HEAD"]);
+const tag = `v${version}`;
+git(["tag", "-a", tag, "-m", tag]);
+git(["push", "--set-upstream", "origin", "HEAD", "--follow-tags"]);
 
-console.log(`已发布 v${version}，版本文件、changelog.md 已提交并推送到远端。`);
+console.log(`已发布 ${tag}，版本文件、changelog.md 和发布标签已推送到远端。`);
