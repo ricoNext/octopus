@@ -2,6 +2,12 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.10] - 2026-09-21
+
+### 变更
+- fix(updater): update public key in tauri configuration (da63eab)
+- chore(release): add TAURI_SIGNING_PRIVATE_KEY_PASSWORD to release workflow (762728e)
+
 ## [0.1.9] - 2026-09-21
 
 ### 变更
