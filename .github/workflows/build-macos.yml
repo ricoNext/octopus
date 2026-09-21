@@ -32,18 +32,13 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 读取应用版本
-        id: version
-        shell: bash
-        run: echo "version=$(node -p \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version\")" >> "$GITHUB_OUTPUT"
-
       - name: 校验发布标签与应用版本
         if: github.ref_type == 'tag'
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          VERSION="$(node -p "require('./package.json').version")"
           if [ "$TAG" != "v$VERSION" ]; then
             echo "标签 $TAG 与 package.json 中的版本 $VERSION 不一致" >&2
             exit 1
@@ -67,9 +62,8 @@ jobs:
       - name: 提取 Release 说明
         if: github.ref_type == 'tag'
         shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          VERSION="$(node -p "require('./package.json').version")"
           awk -v version="$VERSION" '
             index($0, "## [" version "]") == 1 { found=1 }
             found && index($0, "## [") == 1 && index($0, "## [" version "]") != 1 { exit }
