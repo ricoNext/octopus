@@ -2,6 +2,15 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.4] - 2026-09-21
+
+### 变更
+- refactor(release): update macOS build workflow to trigger on version tags and streamline release process (aafb19b)
+- feat(editor): 添加默认编辑器设置功能，更新相关文档和界面 (a4513dd)
+- Update README.md (047246b)
+- chore(release): v0.1.3 (886bf32)
+- feat(branches): 支持远程与最近分支选择及主分支切换 (2e5a3a3)
+
 ## [0.1.3] - 2026-09-21
 
 ### 变更
