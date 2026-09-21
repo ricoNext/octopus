@@ -2,6 +2,11 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.12] - 2026-09-21
+
+### 变更
+- chore(release): add temporary handling for Tauri signing keys in workflow (3a7053a)
+
 ## [0.1.11] - 2026-09-21
 
 ### 变更
