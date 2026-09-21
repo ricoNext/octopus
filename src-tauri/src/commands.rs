@@ -255,8 +255,8 @@ pub fn switch_main_branch(
 }
 
 #[tauri::command]
-pub fn open_in_cursor(path: String) -> Result<(), String> {
-    workspace::open_in_cursor(&path)
+pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
+    workspace::open_in_editor(&editor, &path)
 }
 
 #[tauri::command]

@@ -67,7 +67,8 @@ export const api = {
     invoke<BranchOptions>("list_branch_options", { projectId }),
   switchMainBranch: (projectId: string, branch: string) =>
     invoke<void>("switch_main_branch", { projectId, branch }),
-  openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),
+  openInEditor: (editor: string, path: string) =>
+    invoke<void>("open_in_editor", { editor, path }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
   ptyOpen: (sessionId: string, cwdId: string, cols: number, rows: number) =>
     invoke<TerminalAttachResult>("pty_open", { sessionId, cwdId, cols, rows }),

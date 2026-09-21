@@ -15,6 +15,7 @@ import {
   MonitorIcon,
   MoonIcon,
   SunIcon,
+  Code2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
@@ -96,7 +97,46 @@ const DEFAULT_SIDEBAR_WIDTH = 288;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const THEME_KEY = "octopus.theme";
+const DEFAULT_EDITOR_KEY = "octopus.default-editor";
 type ThemePreference = "light" | "dark" | "system";
+
+const EDITOR_OPTIONS = [
+  { value: "Cursor", label: "Cursor" },
+  { value: "Visual Studio Code", label: "Visual Studio Code" },
+  { value: "Windsurf", label: "Windsurf" },
+  { value: "Zed", label: "Zed" },
+  { value: "Sublime Text", label: "Sublime Text" },
+  { value: "Nova", label: "Nova" },
+] as const;
+
+const EDITOR_VALUES = new Set<string>(EDITOR_OPTIONS.map((option) => option.value));
+const LEGACY_EDITOR_VALUES: Record<string, string> = {
+  cursor: "Cursor",
+  code: "Visual Studio Code",
+  "visual studio code": "Visual Studio Code",
+  windsurf: "Windsurf",
+  zed: "Zed",
+  "sublime text": "Sublime Text",
+  nova: "Nova",
+  "/applications/cursor.app": "Cursor",
+  "/applications/visual studio code.app": "Visual Studio Code",
+  "/applications/windsurf.app": "Windsurf",
+  "/applications/zed.app": "Zed",
+  "/applications/sublime text.app": "Sublime Text",
+  "/applications/nova.app": "Nova",
+};
+
+function readDefaultEditor(): string {
+  try {
+    const value = localStorage.getItem(DEFAULT_EDITOR_KEY)?.trim() ?? "";
+    if (EDITOR_VALUES.has(value)) {
+      return value;
+    }
+    return LEGACY_EDITOR_VALUES[value.toLowerCase()] ?? "";
+  } catch {
+    return "";
+  }
+}
 
 function readThemePreference(): ThemePreference {
   try {
@@ -222,6 +262,7 @@ export default function App() {
   const resizePointerRef = useRef<{ pointerId: number } | null>(null);
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
+  const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
 
   const [inspect, setInspect] = useState<InspectResult | null>(null);
   const [importSelected, setImportSelected] = useState<Record<string, boolean>>({});
@@ -258,6 +299,19 @@ export default function App() {
     mediaQuery.addEventListener("change", handleSystemThemeChange);
     return () => mediaQuery.removeEventListener("change", handleSystemThemeChange);
   }, [themePreference]);
+
+  useEffect(() => {
+    try {
+      const editor = defaultEditor.trim();
+      if (editor) {
+        localStorage.setItem(DEFAULT_EDITOR_KEY, editor);
+      } else {
+        localStorage.removeItem(DEFAULT_EDITOR_KEY);
+      }
+    } catch {
+      // 本地存储不可用时，编辑器设置仍会在当前会话中生效。
+    }
+  }, [defaultEditor]);
 
   useEffect(() => {
     try {
@@ -751,9 +805,14 @@ export default function App() {
     }
   }
 
-  async function handleOpenCursor(path: string) {
+  async function handleOpenEditor(path: string) {
+    const editor = defaultEditor.trim();
+    if (!editor) {
+      toast.error("请先到设置中配置默认编辑器");
+      return;
+    }
     try {
-      await api.openInCursor(path);
+      await api.openInEditor(editor, path);
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -847,7 +906,8 @@ export default function App() {
               .then((next) => applySnapshot(next))
               .catch((error) => toast.error(invokeError(error)));
           }}
-          onOpenCursor={(path) => void handleOpenCursor(path)}
+          onOpenEditor={(path) => void handleOpenEditor(path)}
+          editorConfigured={Boolean(defaultEditor.trim())}
           onRevealFinder={(path) => void handleRevealFinder(path)}
           onListBranchOptions={(projectId) => api.listBranchOptions(projectId)}
           onSwitchMainBranch={handleSwitchMainBranch}
@@ -937,6 +997,8 @@ export default function App() {
             onBack={() => setView("workspace")}
             themePreference={themePreference}
             onThemeChange={setThemePreference}
+            defaultEditor={defaultEditor}
+            onDefaultEditorChange={setDefaultEditor}
           />
         ) : (
           <>
@@ -1400,12 +1462,16 @@ function SettingsPage({
   onBack,
   themePreference,
   onThemeChange,
+  defaultEditor,
+  onDefaultEditorChange,
 }: {
   onBack: () => void;
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
+  defaultEditor: string;
+  onDefaultEditorChange: (editor: string) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"appearance">("appearance");
+  const [activeSection, setActiveSection] = useState<"appearance" | "editor">("appearance");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1444,6 +1510,20 @@ function SettingsPage({
             >
               <PaletteIcon className="size-4 shrink-0" />
               <span>外观</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "mt-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                activeSection === "editor"
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground",
+              )}
+              onClick={() => setActiveSection("editor")}
+              aria-current={activeSection === "editor" ? "page" : undefined}
+            >
+              <Code2Icon className="size-4 shrink-0" />
+              <span>编辑器</span>
             </button>
           </nav>
         </aside>
@@ -1494,6 +1574,40 @@ function SettingsPage({
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+              </section>
+            ) : null}
+            {activeSection === "editor" ? (
+              <section className="space-y-4">
+                <div>
+                  <h2 className="text-base font-semibold">编辑器</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    选择从项目菜单打开路径时使用的默认编辑器。
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-card px-4 py-4">
+                  <Label htmlFor="default-editor">默认编辑器</Label>
+                  <div className="mt-2">
+                    <Select
+                      value={defaultEditor || "none"}
+                      onValueChange={(value) => onDefaultEditorChange(value === "none" ? "" : value)}
+                    >
+                      <SelectTrigger id="default-editor" className="w-full max-w-sm" aria-label="默认编辑器">
+                        <SelectValue placeholder="选择编辑器" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">未设置</SelectItem>
+                        {EDITOR_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    请选择已安装的编辑器。未配置时，项目菜单中的“在编辑器中打开”会被禁用。
+                  </p>
                 </div>
               </section>
             ) : null}

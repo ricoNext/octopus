@@ -28,7 +28,7 @@ pub fn run() {
             commands::list_local_branches,
             commands::list_branch_options,
             commands::switch_main_branch,
-            commands::open_in_cursor,
+            commands::open_in_editor,
             commands::reveal_in_finder,
             commands::pty_open,
             commands::pty_detach,

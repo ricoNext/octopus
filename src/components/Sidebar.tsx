@@ -74,7 +74,8 @@ type SidebarProps = {
   onRetryWorktree: (worktreeId: string) => void;
   onAbandonWorktree: (worktreeId: string) => void;
   onRemoveMissing: (worktreeId: string) => void;
-  onOpenCursor: (path: string) => void;
+  onOpenEditor: (path: string) => void;
+  editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
   settingsActive?: boolean;
   onOpenSettings: () => void;
@@ -86,28 +87,31 @@ type SidebarProps = {
 
 type SidebarContextMenu =
   | { kind: "project"; id: string; x: number; y: number }
+  | { kind: "main"; id: string; x: number; y: number }
   | { kind: "worktree"; id: string; x: number; y: number };
 
 type ProjectMenuItemsProps = {
   project: Project;
-  onOpenCursor: (path: string) => void;
+  onOpenEditor: (path: string) => void;
+  editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
   onRemoveProject: (projectId: string) => void;
 };
 
 function ProjectMenuItems({
   project,
-  onOpenCursor,
+  onOpenEditor,
+  editorConfigured,
   onRevealFinder,
   onRemoveProject,
 }: ProjectMenuItemsProps) {
   return (
     <>
       <DropdownMenuItem
-        onClick={() => onOpenCursor(project.rootPath)}
-        disabled={project.pathMissing}
+        onClick={() => onOpenEditor(project.rootPath)}
+        disabled={project.pathMissing || !editorConfigured}
       >
-        在 Cursor 中打开
+        {editorConfigured ? "在编辑器中打开" : "在编辑器中打开（请在设置中配置）"}
       </DropdownMenuItem>
       <DropdownMenuItem
         onClick={() => onRevealFinder(project.rootPath)}
@@ -126,9 +130,41 @@ function ProjectMenuItems({
   );
 }
 
+type MainWorkspaceMenuItemsProps = {
+  project: Project;
+  onOpenEditor: (path: string) => void;
+  editorConfigured: boolean;
+  onRevealFinder: (path: string) => void;
+};
+
+function MainWorkspaceMenuItems({
+  project,
+  onOpenEditor,
+  editorConfigured,
+  onRevealFinder,
+}: MainWorkspaceMenuItemsProps) {
+  return (
+    <>
+      <DropdownMenuItem
+        onClick={() => onOpenEditor(project.rootPath)}
+        disabled={project.pathMissing || !editorConfigured}
+      >
+        {editorConfigured ? "在编辑器中打开" : "在编辑器中打开（请在设置中配置）"}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => onRevealFinder(project.rootPath)}
+        disabled={project.pathMissing}
+      >
+        在访达中显示
+      </DropdownMenuItem>
+    </>
+  );
+}
+
 type WorktreeMenuItemsProps = {
   worktree: Worktree;
-  onOpenCursor: (path: string) => void;
+  onOpenEditor: (path: string) => void;
+  editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
   onRetryWorktree: (worktreeId: string) => void;
   onAbandonWorktree: (worktreeId: string) => void;
@@ -138,7 +174,8 @@ type WorktreeMenuItemsProps = {
 
 function WorktreeMenuItems({
   worktree,
-  onOpenCursor,
+  onOpenEditor,
+  editorConfigured,
   onRevealFinder,
   onRetryWorktree,
   onAbandonWorktree,
@@ -148,10 +185,10 @@ function WorktreeMenuItems({
   return (
     <>
       <DropdownMenuItem
-        onClick={() => onOpenCursor(worktree.path)}
-        disabled={worktree.missing}
+        onClick={() => onOpenEditor(worktree.path)}
+        disabled={worktree.missing || !editorConfigured}
       >
-        在 Cursor 中打开
+        {editorConfigured ? "在编辑器中打开" : "在编辑器中打开（请在设置中配置）"}
       </DropdownMenuItem>
       <DropdownMenuItem
         onClick={() => onRevealFinder(worktree.path)}
@@ -198,7 +235,8 @@ export function Sidebar({
   onRetryWorktree,
   onAbandonWorktree,
   onRemoveMissing,
-  onOpenCursor,
+  onOpenEditor,
+  editorConfigured,
   onRevealFinder,
   settingsActive = false,
   onOpenSettings,
@@ -299,6 +337,10 @@ export function Sidebar({
 
   const contextProject =
     contextMenu?.kind === "project"
+      ? projects.find((item) => item.id === contextMenu.id) ?? null
+      : null;
+  const contextMain =
+    contextMenu?.kind === "main"
       ? projects.find((item) => item.id === contextMenu.id) ?? null
       : null;
   const contextWorktree =
@@ -410,7 +452,8 @@ export function Sidebar({
                         <DropdownMenuContent align="end">
                           <ProjectMenuItems
                             project={project}
-                            onOpenCursor={onOpenCursor}
+                            onOpenEditor={onOpenEditor}
+                            editorConfigured={editorConfigured}
                             onRevealFinder={onRevealFinder}
                             onRemoveProject={onRemoveProject}
                           />
@@ -436,6 +479,9 @@ export function Sidebar({
                               ? "bg-sidebar-accent text-sidebar-accent-foreground"
                               : "hover:bg-sidebar-accent/70",
                           )}
+                          onContextMenu={(event) =>
+                            openContextMenu(event, { kind: "main", id: project.id })
+                          }
                         >
                           <button
                             type="button"
@@ -466,6 +512,26 @@ export function Sidebar({
                               <GitBranchIcon className="size-3.5" />
                             </Button>
                           </DropdownMenuTrigger>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                size="icon-xs"
+                                variant="ghost"
+                                className="shrink-0"
+                                aria-label="主工作区操作"
+                              >
+                                <MoreHorizontalIcon />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <MainWorkspaceMenuItems
+                                project={project}
+                                onOpenEditor={onOpenEditor}
+                                editorConfigured={editorConfigured}
+                                onRevealFinder={onRevealFinder}
+                              />
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                         <DropdownMenuContent
                             side="right"
@@ -566,7 +632,8 @@ export function Sidebar({
                               <DropdownMenuContent align="end">
                                 <WorktreeMenuItems
                                   worktree={worktree}
-                                  onOpenCursor={onOpenCursor}
+                                  onOpenEditor={onOpenEditor}
+                                  editorConfigured={editorConfigured}
                                   onRevealFinder={onRevealFinder}
                                   onRetryWorktree={onRetryWorktree}
                                   onAbandonWorktree={onAbandonWorktree}
@@ -587,7 +654,7 @@ export function Sidebar({
             </div>
           </div>
           <DropdownMenu
-            open={Boolean(contextMenu && (contextProject || contextWorktree))}
+            open={Boolean(contextMenu && (contextProject || contextMain || contextWorktree))}
             onOpenChange={(open) => !open && setContextMenu(null)}
           >
             <DropdownMenuTrigger asChild>
@@ -610,14 +677,23 @@ export function Sidebar({
               {contextProject ? (
                 <ProjectMenuItems
                   project={contextProject}
-                  onOpenCursor={onOpenCursor}
+                  onOpenEditor={onOpenEditor}
+                  editorConfigured={editorConfigured}
                   onRevealFinder={onRevealFinder}
                   onRemoveProject={onRemoveProject}
+                />
+              ) : contextMain ? (
+                <MainWorkspaceMenuItems
+                  project={contextMain}
+                  onOpenEditor={onOpenEditor}
+                  editorConfigured={editorConfigured}
+                  onRevealFinder={onRevealFinder}
                 />
               ) : contextWorktree ? (
                 <WorktreeMenuItems
                   worktree={contextWorktree}
-                  onOpenCursor={onOpenCursor}
+                  onOpenEditor={onOpenEditor}
+                  editorConfigured={editorConfigured}
                   onRevealFinder={onRevealFinder}
                   onRetryWorktree={onRetryWorktree}
                   onAbandonWorktree={onAbandonWorktree}

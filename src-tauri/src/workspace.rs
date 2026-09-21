@@ -6,7 +6,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::git::{
-    canonicalize_or, command_v, default_branch, existing_linked_worktrees, git, git_ok,
+    canonicalize_or, default_branch, existing_linked_worktrees, git, git_ok,
     local_branches, prefer_stderr, recent_branches, remote_branches, same_path, show_toplevel,
     worktree_list,
 };
@@ -448,24 +448,31 @@ pub fn switch_main_branch(store: &Store, project_id: &str, branch: &str) -> Resu
     }
 }
 
-pub fn open_in_cursor(path: &str) -> Result<(), String> {
-    if let Some(cursor) = command_v("cursor") {
-        let status = Command::new(cursor)
-            .arg(path)
-            .status()
-            .map_err(|err| format!("{err}"))?;
-        if status.success() {
-            return Ok(());
-        }
+pub fn open_in_editor(editor: &str, path: &str) -> Result<(), String> {
+    let editor = editor.trim();
+    if editor.is_empty() {
+        return Err("请先到设置中配置默认编辑器".into());
     }
-    let status = Command::new("open")
-        .args(["-a", "Cursor", path])
-        .status()
-        .map_err(|err| format!("{err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("打不开 Cursor，请确认已安装".into())
+
+    let command_error = match Command::new(editor).arg(path).status() {
+        Ok(status) if status.success() => return Ok(()),
+        Ok(status) => format!("编辑器命令退出，状态码 {}", status.code().unwrap_or(-1)),
+        Err(error) => error.to_string(),
+    };
+
+    // macOS 应用通常没有暴露 CLI 命令，允许用户直接填写应用名或 .app 路径。
+    let open_status = Command::new("open")
+        .args(["-a", editor, path])
+        .status();
+    match open_status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "无法打开编辑器“{editor}”（命令错误：{command_error}，open -a 状态码：{}）",
+            status.code().unwrap_or(-1)
+        )),
+        Err(error) => Err(format!(
+            "无法打开编辑器“{editor}”：{command_error}；{error}"
+        )),
     }
 }
 
