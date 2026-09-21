@@ -12,6 +12,8 @@
 
 octopus 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复的内嵌终端。
 
+![](https://neptune-ipc.oss-cn-shenzhen.aliyuncs.com/img/20260921135740826.png)
+
 ## 运行环境
 
 - macOS 12 或更高版本，目前优先支持 Apple Silicon
@@ -44,6 +46,8 @@ sudo xattr -dr com.apple.quarantine /Applications/octopus.app
 在项目旁点加号，填写显示名、起始本地分支，以及工作树父目录。
 
 显示名同时作为新分支名。只能用 ASCII 字母、数字、`/`、`-`、`_` 和 `.`，不能用中文，也不能包含非法路径片段。
+
+![](https://neptune-ipc.oss-cn-shenzhen.aliyuncs.com/img/20260921135849607.png)
 
 默认父目录是：
 
