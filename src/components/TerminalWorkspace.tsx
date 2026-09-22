@@ -14,7 +14,9 @@ export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWork
   const hostRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<PaneManager | null>(null);
   const tabRef = useRef(tab);
+  const onChangeRef = useRef(onChange);
   tabRef.current = tab;
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -28,10 +30,10 @@ export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWork
       getActiveLeafId: () => tabRef.current.activeLeafId,
       callbacks: {
         onActiveLeafChange: (leafId) => {
-          onChange({ ...tabRef.current, activeLeafId: leafId });
+          onChangeRef.current({ ...tabRef.current, activeLeafId: leafId });
         },
         onRatioChange: (layout) => {
-          onChange({ ...tabRef.current, layout });
+          onChangeRef.current({ ...tabRef.current, layout });
         },
       },
     });
@@ -41,7 +43,7 @@ export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWork
       manager.dispose();
       managerRef.current = null;
     };
-  }, [tab.id, cwdId, onChange]);
+  }, [tab.id, cwdId]);
 
   useEffect(() => {
     managerRef.current?.setActive(active);
