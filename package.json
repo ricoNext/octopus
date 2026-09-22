@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "release": "bun scripts/release.ts"
+    "release": "bun scripts/release.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -38,6 +40,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.0.1"
   }
 }
