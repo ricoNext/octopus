@@ -117,8 +117,9 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<(), String> {
-        self.client.request("write", json!({ "sessionId": id, "data": data }))?;
-        Ok(())
+        // Fire-and-forget like Orca's ipcRenderer.send('pty:write'): do not wait for
+        // the daemon JSON-RPC response. Waiting made every keystroke pay a full RTT.
+        self.client.notify("write", json!({ "sessionId": id, "data": data }))
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -263,9 +264,13 @@ impl DaemonClient {
                             }
                             WireMessage::Event { event, session_id, data, .. } => {
                                 if event == "ptyData" {
+                                    let bytes = data.unwrap_or_default();
                                     let _ = app.emit(
                                         "pty-data",
-                                        PtyDataEvent { id: session_id, data: data.unwrap_or_default() },
+                                        PtyDataEvent {
+                                            id: session_id,
+                                            data: String::from_utf8_lossy(&bytes).into_owned(),
+                                        },
                                     );
                                 } else if event == "ptyExit" {
                                     let _ = app.emit("pty-exit", PtyExitEvent { id: session_id });
@@ -318,6 +323,29 @@ impl DaemonClient {
         Ok(attach)
     }
 
+    /// Send a daemon command without waiting for its response (Orca-style keystroke path).
+    fn notify(&self, command: &str, payload: Value) -> Result<(), String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
+        let message = WireMessage::Request {
+            version: PROTOCOL_VERSION,
+            id,
+            command: command.to_string(),
+            token: None,
+            payload,
+        };
+        let encoded = serde_json::to_vec(&message).map_err(|err| format!("无法编码终端请求：{err}"))?;
+        let mut stream = self.stream.lock().map_err(|_| "终端连接锁损坏".to_string())?;
+        stream
+            .write_all(&encoded)
+            .map_err(|err| format!("无法发送终端请求：{err}"))?;
+        stream
+            .write_all(b"\n")
+            .map_err(|err| format!("无法发送终端请求：{err}"))?;
+        stream
+            .flush()
+            .map_err(|err| format!("无法发送终端请求：{err}"))
+    }
+
     fn request(&self, command: &str, payload: Value) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let waiter = Arc::new((Mutex::new(None), Condvar::new()));
@@ -358,7 +386,7 @@ impl DaemonClient {
 #[serde(rename_all = "camelCase")]
 struct PtyDataEvent {
     id: String,
-    data: Vec<u8>,
+    data: String,
 }
 
 #[derive(Clone, Serialize)]

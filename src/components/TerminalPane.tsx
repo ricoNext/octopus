@@ -15,7 +15,7 @@ type TerminalPaneProps = {
 
 type PtyDataEvent = {
   id: string;
-  data: number[];
+  data: string;
 };
 
 type PtyExitEvent = {
@@ -192,8 +192,7 @@ export function TerminalPane({ sessionId, cwdId, active }: TerminalPaneProps) {
       if (event.payload.id !== sessionId) {
         return;
       }
-      const bytes = new Uint8Array(event.payload.data);
-      termRef.current?.write(bytes);
+      termRef.current?.write(event.payload.data);
     }).then((fn) => {
       if (cancelled) {
         fn();

@@ -31,6 +31,11 @@ import type { BranchOptions, Project, Selection, Worktree } from "@/types";
 
 const COLLAPSED_KEY = "octopus.sidebar.collapsedProjectIds";
 
+/** Selected directory / settings row — stronger than default sidebar-accent. */
+const SIDEBAR_ITEM_ACTIVE =
+  "bg-sidebar-primary/15 font-medium text-sidebar-foreground shadow-[inset_3px_0_0_0_var(--sidebar-primary)]";
+const SIDEBAR_ITEM_IDLE = "hover:bg-sidebar-accent/70";
+
 function readCollapsedIds(): Set<string> {
   try {
     const raw = localStorage.getItem(COLLAPSED_KEY);
@@ -475,9 +480,7 @@ export function Sidebar({
                         <div
                           className={cn(
                             "flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-left text-sm",
-                            mainSelected
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                              : "hover:bg-sidebar-accent/70",
+                            mainSelected ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE,
                           )}
                           onContextMenu={(event) =>
                             openContextMenu(event, { kind: "main", id: project.id })
@@ -488,7 +491,12 @@ export function Sidebar({
                             className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left"
                             onClick={() => onSelect({ kind: "main", projectId: project.id })}
                           >
-                            <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                            <FolderOpenIcon
+                              className={cn(
+                                "size-3.5 shrink-0",
+                                mainSelected ? "text-sidebar-primary" : "text-muted-foreground",
+                              )}
+                            />
                             <span className="min-w-0 flex-1">
                               <span className="flex min-w-0 items-center gap-1.5">
                                 <span className="truncate">{project.mainBranch ?? "HEAD"}</span>
@@ -598,13 +606,16 @@ export function Sidebar({
                               type="button"
                               className={cn(
                                 "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                                selected
-                                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                  : "hover:bg-sidebar-accent/70",
+                                selected ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE,
                               )}
                               onClick={() => onSelect({ kind: "worktree", worktreeId: worktree.id })}
                             >
-                              <SquareTerminalIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                              <SquareTerminalIcon
+                                className={cn(
+                                  "mt-0.5 size-3.5 shrink-0",
+                                  selected ? "text-sidebar-primary" : "text-muted-foreground",
+                                )}
+                              />
                               <span className="min-w-0">
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{worktree.branchName}</span>
@@ -709,7 +720,7 @@ export function Sidebar({
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
                 settingsActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  ? SIDEBAR_ITEM_ACTIVE
                   : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground",
               )}
               onClick={onOpenSettings}

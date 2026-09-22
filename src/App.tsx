@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -16,15 +17,17 @@ import {
   MoonIcon,
   SunIcon,
   Code2Icon,
+  Columns2Icon,
   InfoIcon,
   RefreshCwIcon,
+  Rows2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
 
 import { CopyableError } from "@/components/CopyableError";
 import { Sidebar } from "@/components/Sidebar";
-import { TerminalPane } from "@/components/TerminalPane";
+import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import {
   AlertDialog,
@@ -57,6 +60,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, invokeError } from "@/lib/api";
+import { matchKeybinding } from "@/lib/keybindings";
+import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
+import {
+  createTerminalTab,
+  nextTerminalTabIndex,
+  migrateTabsByContext,
+  sessionIdsForTab,
+  type TerminalTab,
+} from "@/lib/terminal/terminal-tab";
 import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
@@ -69,11 +81,6 @@ import type {
 } from "@/types";
 
 const emptySnapshot: AppSnapshot = { projects: [], worktrees: [] };
-
-type TerminalTab = {
-  id: string;
-  label: string;
-};
 
 type TabCloseMode = "current" | "others" | "left" | "right";
 type AppView = "workspace" | "settings";
@@ -90,6 +97,7 @@ type RenameTabTarget = {
 };
 
 type PersistedTerminalState = {
+  version?: number;
   selection?: Selection;
   tabsByContext?: Record<string, TerminalTab[]>;
   activeTabByContext?: Record<string, string>;
@@ -181,24 +189,7 @@ function readPersistedTerminalState(): PersistedTerminalState {
       return {};
     }
     const value = parsed as Record<string, unknown>;
-    const tabsByContext: Record<string, TerminalTab[]> = {};
-    if (value.tabsByContext && typeof value.tabsByContext === "object") {
-      for (const [contextId, rawTabs] of Object.entries(value.tabsByContext)) {
-        if (!Array.isArray(rawTabs)) {
-          continue;
-        }
-        const tabs = rawTabs.filter(
-          (tab): tab is TerminalTab =>
-            Boolean(tab) &&
-            typeof tab === "object" &&
-            typeof (tab as { id?: unknown }).id === "string" &&
-            typeof (tab as { label?: unknown }).label === "string",
-        );
-        if (tabs.length > 0) {
-          tabsByContext[contextId] = tabs;
-        }
-      }
-    }
+    const tabsByContext = migrateTabsByContext(value.tabsByContext);
     const activeTabByContext: Record<string, string> = {};
     if (value.activeTabByContext && typeof value.activeTabByContext === "object") {
       for (const [contextId, tabId] of Object.entries(value.activeTabByContext)) {
@@ -222,10 +213,6 @@ function readPersistedTerminalState(): PersistedTerminalState {
   } catch {
     return {};
   }
-}
-
-function createTerminalTab(index: number): TerminalTab {
-  return { id: crypto.randomUUID(), label: `终端 ${index}` };
 }
 
 function startWindowDrag(event: MouseEvent<HTMLElement>) {
@@ -332,24 +319,6 @@ export default function App() {
       // 本地存储不可用时，宽度仍可在当前会话中正常调整。
     }
   }, [sidebarWidth]);
-
-  useEffect(() => {
-    function handleSidebarShortcut(event: KeyboardEvent) {
-      if (view === "settings") {
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
-        const target = event.target;
-        if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true']")) {
-          return;
-        }
-        event.preventDefault();
-        setSidebarCollapsed((current) => !current);
-      }
-    }
-    window.addEventListener("keydown", handleSidebarShortcut);
-    return () => window.removeEventListener("keydown", handleSidebarShortcut);
-  }, [view]);
 
   useEffect(() => {
     document.body.style.cursor = isResizingSidebar ? "col-resize" : "";
@@ -461,14 +430,26 @@ export default function App() {
     if (!stateHydrated) {
       return;
     }
-    try {
-      localStorage.setItem(
-        TERMINAL_STATE_KEY,
-        JSON.stringify({ selection, tabsByContext, activeTabByContext } satisfies PersistedTerminalState),
-      );
-    } catch {
-      // 本地存储不可用或已满时，终端仍可正常使用。
+    const payload = JSON.stringify({
+      version: 2,
+      selection,
+      tabsByContext,
+      activeTabByContext,
+    } satisfies PersistedTerminalState);
+    const persist = () => {
+      try {
+        localStorage.setItem(TERMINAL_STATE_KEY, payload);
+      } catch {
+        // 本地存储不可用或已满时，终端仍可正常使用。
+      }
+    };
+    // Defer so sidebar selection can paint before sync disk work.
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(persist, { timeout: 500 });
+      return () => cancelIdleCallback(id);
     }
+    const timer = window.setTimeout(persist, 0);
+    return () => window.clearTimeout(timer);
   }, [activeTabByContext, selection, stateHydrated, tabsByContext]);
 
   useEffect(() => {
@@ -514,6 +495,147 @@ export default function App() {
   }, [renameTabTarget, selectedContextId]);
 
   useEffect(() => {
+    function isEditableTarget(target: EventTarget | null): boolean {
+      return (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, [contenteditable='true']") !== null
+      );
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (view === "settings") {
+        return;
+      }
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const action = matchKeybinding(event);
+      if (!action) {
+        return;
+      }
+
+      if (action === "sidebar.toggle") {
+        event.preventDefault();
+        setSidebarCollapsed((current) => !current);
+        return;
+      }
+
+      if (!selectedContextId) {
+        return;
+      }
+
+      const tabs = tabsByContext[selectedContextId] ?? [];
+      const activeTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+      const tab = tabs.find((item) => item.id === activeTabId);
+      if (!tab) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (action === "tab.newTerminal") {
+        addTerminalTab();
+        return;
+      }
+
+      if (action === "terminal.splitRight") {
+        splitActivePane("vertical");
+        return;
+      }
+
+      if (action === "terminal.splitDown") {
+        splitActivePane("horizontal");
+        return;
+      }
+
+      if (action === "terminal.closePane") {
+        closePane(tab.activeLeafId);
+        return;
+      }
+
+      if (action === "terminal.focusNextPane") {
+        const activeLeafId = nextLeafId(tab.layout, tab.activeLeafId);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: tabs.map((item) =>
+            item.id === tab.id ? { ...item, activeLeafId } : item,
+          ),
+        }));
+        return;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [view, selectedContextId, tabsByContext, activeTabByContext]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<string>("octopus://terminal-shortcut", (event) => {
+      switch (event.payload) {
+        case "splitRight":
+          splitActivePane("vertical");
+          break;
+        case "splitDown":
+          splitActivePane("horizontal");
+          break;
+        case "newTerminal":
+          addTerminalTab();
+          break;
+        case "focusNextPane": {
+          if (!selectedContextId) {
+            return;
+          }
+          const tabs = tabsByContext[selectedContextId] ?? [];
+          const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+          const tab = tabs.find((item) => item.id === currentActiveTabId);
+          if (!tab) {
+            return;
+          }
+          const activeLeafId = nextLeafId(tab.layout, tab.activeLeafId);
+          setTabsByContext((current) => ({
+            ...current,
+            [selectedContextId]: (current[selectedContextId] ?? []).map((item) =>
+              item.id === tab.id ? { ...item, activeLeafId } : item,
+            ),
+          }));
+          break;
+        }
+        case "closePane": {
+          if (!selectedContextId) {
+            return;
+          }
+          const tabs = tabsByContext[selectedContextId] ?? [];
+          const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+          const tab = tabs.find((item) => item.id === currentActiveTabId);
+          if (!tab) {
+            return;
+          }
+          closePane(tab.activeLeafId);
+          break;
+        }
+        default:
+          break;
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [selectedContextId, tabsByContext, activeTabByContext]);
+
+
+  useEffect(() => {
     activeTabElementRef.current?.scrollIntoView({
       behavior: "auto",
       block: "nearest",
@@ -526,12 +648,123 @@ export default function App() {
       return;
     }
     const tabs = tabsByContext[selectedContextId] ?? [];
-    const tab = createTerminalTab(tabs.length + 1);
+    const tab = createTerminalTab(nextTerminalTabIndex(tabs.map((item) => item.label)));
     setTabsByContext((current) => ({
       ...current,
       [selectedContextId]: [...(current[selectedContextId] ?? []), tab],
     }));
     setActiveTabByContext((current) => ({ ...current, [selectedContextId]: tab.id }));
+  }
+
+
+  function splitPane(
+    leafId: string,
+    direction: "horizontal" | "vertical",
+    tabId?: string,
+    contextId: string | null = selectedContextId,
+  ) {
+    if (!contextId) {
+      return;
+    }
+    const tabs = tabsByContext[contextId] ?? [];
+    const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
+    const resolvedTabId = tabId ?? currentActiveTabId;
+    const tab = tabs.find((item) => item.id === resolvedTabId);
+    if (!tab) {
+      return;
+    }
+    const leaves = listLeaves(tab.layout);
+    const targetLeafId = leaves.includes(leafId)
+      ? leafId
+      : leaves.includes(tab.activeLeafId)
+        ? tab.activeLeafId
+        : leaves[0];
+    if (!targetLeafId) {
+      toast.error("当前没有可分屏的终端");
+      return;
+    }
+    const newLeafId = crypto.randomUUID();
+    const splitId = crypto.randomUUID();
+    const layout = splitLeaf(tab.layout, targetLeafId, direction, newLeafId, splitId);
+    if (listLeaves(layout).length === leaves.length) {
+      toast.error("分屏失败，请再试一次");
+      return;
+    }
+    setTabsByContext((current) => ({
+      ...current,
+      [contextId]: (current[contextId] ?? []).map((item) =>
+        item.id === tab.id
+          ? {
+              ...item,
+              layout,
+              activeLeafId: newLeafId,
+              sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
+            }
+          : item,
+      ),
+    }));
+    setActiveTabByContext((current) => ({ ...current, [contextId]: tab.id }));
+  }
+
+  function splitActivePane(direction: "horizontal" | "vertical") {
+    if (!selectedContextId) {
+      return;
+    }
+    const tabs = tabsByContext[selectedContextId] ?? [];
+    const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+    const tab = tabs.find((item) => item.id === currentActiveTabId);
+    if (!tab) {
+      return;
+    }
+    splitPane(tab.activeLeafId, direction, tab.id, selectedContextId);
+  }
+
+  function closePane(
+    leafId: string,
+    tabId?: string,
+    contextId: string | null = selectedContextId,
+  ) {
+    if (!contextId) {
+      return;
+    }
+    const tabs = tabsByContext[contextId] ?? [];
+    const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
+    const resolvedTabId = tabId ?? currentActiveTabId;
+    const tab = tabs.find((item) => item.id === resolvedTabId);
+    if (!tab) {
+      return;
+    }
+    const leaves = listLeaves(tab.layout);
+    const targetLeafId = leaves.includes(leafId) ? leafId : tab.activeLeafId;
+    if (!leaves.includes(targetLeafId)) {
+      return;
+    }
+    const sessionId = tab.sessionByLeafId[targetLeafId];
+    const layout = removeLeaf(tab.layout, targetLeafId);
+    if (sessionId) {
+      void api.ptyKill(sessionId).catch(() => undefined);
+    }
+    if (!layout) {
+      closeTerminalTab(tab.id);
+      return;
+    }
+    const { [targetLeafId]: _, ...rest } = tab.sessionByLeafId;
+    const activeLeafId =
+      tab.activeLeafId === targetLeafId ? nextLeafId(layout, targetLeafId) : tab.activeLeafId;
+    setTabsByContext((current) => ({
+      ...current,
+      [contextId]: (current[contextId] ?? []).map((item) =>
+        item.id === tab.id
+          ? {
+              ...item,
+              layout,
+              sessionByLeafId: rest,
+              activeLeafId,
+            }
+          : item,
+      ),
+    }));
+    setActiveTabByContext((current) => ({ ...current, [contextId]: tab.id }));
   }
 
   function closeTerminalTabs(tabId: string, mode: TabCloseMode) {
@@ -560,7 +793,12 @@ export default function App() {
     }
 
     for (const id of idsToClose) {
-      void api.ptyKill(id).catch(() => undefined);
+      const tab = tabs.find((item) => item.id === id);
+      if (tab) {
+        for (const sessionId of sessionIdsForTab(tab)) {
+          void api.ptyKill(sessionId).catch(() => undefined);
+        }
+      }
     }
     const nextTabs = tabs.filter((tab) => !idsToClose.has(tab.id));
     setTabsByContext((current) => ({ ...current, [selectedContextId]: nextTabs }));
@@ -1113,6 +1351,24 @@ export default function App() {
                 <PencilIcon />
                 重命名
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  splitActivePane("vertical");
+                  setTabContextMenu(null);
+                }}
+              >
+                <Columns2Icon />
+                向右分屏
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  splitActivePane("horizontal");
+                  setTabContextMenu(null);
+                }}
+              >
+                <Rows2Icon />
+                向下分屏
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={selectedTabs.length <= 1}
@@ -1179,10 +1435,24 @@ export default function App() {
                     : "pointer-events-none invisible absolute inset-0"
                 }
               >
-                <TerminalPane
-                  sessionId={tab.id}
+                <TerminalWorkspace
+                  tab={tab}
                   cwdId={context.cwdId}
                   active={selectedContextId === context.id && activeTabId === tab.id}
+                  onChange={(nextTab) => {
+                    setTabsByContext((current) => ({
+                      ...current,
+                      [context.id]: (current[context.id] ?? []).map((item) =>
+                        item.id === tab.id ? nextTab : item,
+                      ),
+                    }));
+                  }}
+                  onSplitLeaf={(leafId, direction) => {
+                    splitPane(leafId, direction, tab.id, context.id);
+                  }}
+                  onCloseLeaf={(leafId) => {
+                    closePane(leafId, tab.id, context.id);
+                  }}
                 />
               </div>
             )),
