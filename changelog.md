@@ -2,6 +2,20 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.14] - 2026-09-22
+
+### 变更
+- feat(terminal): 新增窗格标题栏分屏关闭操作与 PTY 事件总线 (4d827bd)
+- docs(terminal): mark multi-pane plan implemented (2a1b017)
+- fix(terminal): avoid remounting PaneManager on onChange identity (7fbb199)
+- feat(terminal): wire multi-pane workspace and shortcuts (24f4854)
+- fix(terminal): remount panes on layout sync and keep all leaves attached (901c52e)
+- feat(terminal): add imperative PaneManager for multi-pane xterm (5fa0666)
+- feat(terminal): add keybinding matcher for pane shortcuts (3368ec1)
+- feat(terminal): persist v2 tab layout shape with single-leaf parity (a02a52f)
+- feat(terminal): add TerminalTab v2 model and v1 migration (9eeb762)
+- feat(terminal): add pane layout tree helpers and vitest (b87b1a1)
+
 ## [未发布]
 
 ### 新增
