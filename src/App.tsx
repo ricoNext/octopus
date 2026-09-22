@@ -57,6 +57,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, invokeError } from "@/lib/api";
+import {
+  createTerminalTab,
+  migrateTabsByContext,
+  sessionIdsForTab,
+  type TerminalTab,
+} from "@/lib/terminal/terminal-tab";
 import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
@@ -69,11 +75,6 @@ import type {
 } from "@/types";
 
 const emptySnapshot: AppSnapshot = { projects: [], worktrees: [] };
-
-type TerminalTab = {
-  id: string;
-  label: string;
-};
 
 type TabCloseMode = "current" | "others" | "left" | "right";
 type AppView = "workspace" | "settings";
@@ -90,6 +91,7 @@ type RenameTabTarget = {
 };
 
 type PersistedTerminalState = {
+  version?: number;
   selection?: Selection;
   tabsByContext?: Record<string, TerminalTab[]>;
   activeTabByContext?: Record<string, string>;
@@ -181,24 +183,7 @@ function readPersistedTerminalState(): PersistedTerminalState {
       return {};
     }
     const value = parsed as Record<string, unknown>;
-    const tabsByContext: Record<string, TerminalTab[]> = {};
-    if (value.tabsByContext && typeof value.tabsByContext === "object") {
-      for (const [contextId, rawTabs] of Object.entries(value.tabsByContext)) {
-        if (!Array.isArray(rawTabs)) {
-          continue;
-        }
-        const tabs = rawTabs.filter(
-          (tab): tab is TerminalTab =>
-            Boolean(tab) &&
-            typeof tab === "object" &&
-            typeof (tab as { id?: unknown }).id === "string" &&
-            typeof (tab as { label?: unknown }).label === "string",
-        );
-        if (tabs.length > 0) {
-          tabsByContext[contextId] = tabs;
-        }
-      }
-    }
+    const tabsByContext = migrateTabsByContext(value.tabsByContext);
     const activeTabByContext: Record<string, string> = {};
     if (value.activeTabByContext && typeof value.activeTabByContext === "object") {
       for (const [contextId, tabId] of Object.entries(value.activeTabByContext)) {
@@ -222,10 +207,6 @@ function readPersistedTerminalState(): PersistedTerminalState {
   } catch {
     return {};
   }
-}
-
-function createTerminalTab(index: number): TerminalTab {
-  return { id: crypto.randomUUID(), label: `终端 ${index}` };
 }
 
 function startWindowDrag(event: MouseEvent<HTMLElement>) {
@@ -464,7 +445,12 @@ export default function App() {
     try {
       localStorage.setItem(
         TERMINAL_STATE_KEY,
-        JSON.stringify({ selection, tabsByContext, activeTabByContext } satisfies PersistedTerminalState),
+        JSON.stringify({
+          version: 2,
+          selection,
+          tabsByContext,
+          activeTabByContext,
+        } satisfies PersistedTerminalState),
       );
     } catch {
       // 本地存储不可用或已满时，终端仍可正常使用。
@@ -560,7 +546,12 @@ export default function App() {
     }
 
     for (const id of idsToClose) {
-      void api.ptyKill(id).catch(() => undefined);
+      const tab = tabs.find((item) => item.id === id);
+      if (tab) {
+        for (const sessionId of sessionIdsForTab(tab)) {
+          void api.ptyKill(sessionId).catch(() => undefined);
+        }
+      }
     }
     const nextTabs = tabs.filter((tab) => !idsToClose.has(tab.id));
     setTabsByContext((current) => ({ ...current, [selectedContextId]: nextTabs }));
@@ -1180,7 +1171,7 @@ export default function App() {
                 }
               >
                 <TerminalPane
-                  sessionId={tab.id}
+                  sessionId={tab.sessionByLeafId[tab.activeLeafId] ?? tab.activeLeafId}
                   cwdId={context.cwdId}
                   active={selectedContextId === context.id && activeTabId === tab.id}
                 />
