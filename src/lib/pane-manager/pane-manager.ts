@@ -6,6 +6,8 @@ import { flexDirectionFor } from "./utils";
 export type PaneManagerCallbacks = {
   onActiveLeafChange: (leafId: string) => void;
   onRatioChange: (layout: PaneLayoutNode) => void;
+  onSplitLeaf: (leafId: string, direction: "horizontal" | "vertical") => void;
+  onCloseLeaf: (leafId: string) => void;
 };
 
 type PaneManagerOptions = {
@@ -15,6 +17,53 @@ type PaneManagerOptions = {
   getActiveLeafId: () => string;
   callbacks: PaneManagerCallbacks;
 };
+
+const ICON_SPLIT_RIGHT = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>`;
+const ICON_SPLIT_DOWN = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>`;
+const ICON_CLOSE = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+
+function createHeaderButton(opts: {
+  title: string;
+  ariaLabel: string;
+  iconHtml: string;
+  onClick: (event: MouseEvent) => void;
+}): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.title = opts.title;
+  button.setAttribute("aria-label", opts.ariaLabel);
+  button.innerHTML = opts.iconHtml;
+  button.style.cssText = `
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+  `;
+  button.addEventListener("mouseenter", () => {
+    button.style.background = "var(--muted)";
+    button.style.color = "var(--foreground)";
+  });
+  button.addEventListener("mouseleave", () => {
+    button.style.background = "transparent";
+    button.style.color = "var(--muted-foreground)";
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    opts.onClick(event);
+  });
+  button.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  return button;
+}
 
 export class PaneManager {
   private host: HTMLElement;
@@ -39,7 +88,6 @@ export class PaneManager {
     const currentLeaves = listLeaves(layout);
     const existingLeaves = new Set(this.sessions.keys());
 
-    // Remove sessions for leaves that no longer exist
     for (const leafId of existingLeaves) {
       if (!currentLeaves.includes(leafId)) {
         const session = this.sessions.get(leafId);
@@ -50,12 +98,12 @@ export class PaneManager {
       }
     }
 
-    // Rebuild DOM tree
+    const preservedInners = new Map(this.leafContainers);
+
     this.host.innerHTML = "";
     this.leafContainers.clear();
-    this.buildNode(layout, this.host);
+    this.buildNode(layout, this.host, preservedInners, currentLeaves.length);
 
-    // Remount existing sessions and create new ones
     for (const leafId of currentLeaves) {
       const container = this.leafContainers.get(leafId);
       if (!container) {
@@ -63,11 +111,8 @@ export class PaneManager {
       }
 
       if (this.sessions.has(leafId)) {
-        // Remount existing session to new container
-        const session = this.sessions.get(leafId)!;
-        session.remount(container);
+        this.sessions.get(leafId)!.refit();
       } else {
-        // Create new session for new leaf
         const sessionId = this.opts.getSessionId(leafId);
         const session = new LeafSession(container, sessionId, this.opts.cwdId);
         this.sessions.set(leafId, session);
@@ -77,22 +122,31 @@ export class PaneManager {
       }
     }
 
-    // Focus the active leaf
-    const activeLeafId = this.opts.getActiveLeafId();
-    this.focusLeaf(activeLeafId);
+    this.focusLeaf(this.opts.getActiveLeafId());
   }
 
-  private buildNode(node: PaneLayoutNode, parent: HTMLElement) {
+  private buildNode(
+    node: PaneLayoutNode,
+    parent: HTMLElement,
+    preservedInners: Map<string, HTMLElement>,
+    leafCount: number,
+  ) {
     if (node.type === "leaf") {
-      this.buildLeaf(node.id, parent);
+      this.buildLeaf(node.id, parent, preservedInners, leafCount);
     } else {
-      this.buildSplit(node, parent);
+      this.buildSplit(node, parent, preservedInners, leafCount);
     }
   }
 
-  private buildLeaf(leafId: string, parent: HTMLElement) {
+  private buildLeaf(
+    leafId: string,
+    parent: HTMLElement,
+    preservedInners: Map<string, HTMLElement>,
+    leafCount: number,
+  ) {
     const container = document.createElement("div");
     container.className = "pane-leaf";
+    container.dataset.leafId = leafId;
     container.style.cssText = `
       position: relative;
       flex: 1;
@@ -101,19 +155,82 @@ export class PaneManager {
       overflow: hidden;
     `;
 
-    const inner = document.createElement("div");
-    inner.style.cssText = `
+    const header = document.createElement("div");
+    header.className = "pane-leaf-header";
+    header.style.cssText = `
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 6px;
+      background: color-mix(in oklab, var(--background) 85%, transparent);
+      backdrop-filter: blur(6px);
+      opacity: 0.55;
+      transition: opacity 0.15s ease;
+    `;
+    header.addEventListener("mouseenter", () => {
+      header.style.opacity = "1";
+    });
+    header.addEventListener("mouseleave", () => {
+      header.style.opacity = "0.55";
+    });
+
+    header.appendChild(
+      createHeaderButton({
+        title: "向右分屏",
+        ariaLabel: "向右分屏",
+        iconHtml: ICON_SPLIT_RIGHT,
+        onClick: () => {
+          this.opts.callbacks.onActiveLeafChange(leafId);
+          this.opts.callbacks.onSplitLeaf(leafId, "vertical");
+        },
+      }),
+    );
+    header.appendChild(
+      createHeaderButton({
+        title: "向下分屏",
+        ariaLabel: "向下分屏",
+        iconHtml: ICON_SPLIT_DOWN,
+        onClick: () => {
+          this.opts.callbacks.onActiveLeafChange(leafId);
+          this.opts.callbacks.onSplitLeaf(leafId, "horizontal");
+        },
+      }),
+    );
+    if (leafCount > 1) {
+      header.appendChild(
+        createHeaderButton({
+          title: "关闭此终端",
+          ariaLabel: "关闭此终端",
+          iconHtml: ICON_CLOSE,
+          onClick: () => {
+            this.opts.callbacks.onCloseLeaf(leafId);
+          },
+        }),
+      );
+    }
+
+    container.appendChild(header);
+
+    let inner = preservedInners.get(leafId);
+    if (!inner) {
+      inner = document.createElement("div");
+      inner.style.cssText = `
       width: 100%;
       height: 100%;
       padding: 0.5rem;
       background: var(--background);
     `;
+    }
     container.appendChild(inner);
     parent.appendChild(container);
 
     this.leafContainers.set(leafId, inner);
 
-    // Handle click to focus
     container.addEventListener("click", () => {
       this.opts.callbacks.onActiveLeafChange(leafId);
       const session = this.sessions.get(leafId);
@@ -123,7 +240,12 @@ export class PaneManager {
     });
   }
 
-  private buildSplit(node: Extract<PaneLayoutNode, { type: "split" }>, parent: HTMLElement) {
+  private buildSplit(
+    node: Extract<PaneLayoutNode, { type: "split" }>,
+    parent: HTMLElement,
+    preservedInners: Map<string, HTMLElement>,
+    leafCount: number,
+  ) {
     const container = document.createElement("div");
     container.className = "pane-split";
     container.style.cssText = `
@@ -144,7 +266,6 @@ export class PaneManager {
     `;
     container.appendChild(firstContainer);
 
-    // Divider
     const divider = document.createElement("div");
     divider.className = "pane-divider";
     const isVertical = node.direction === "vertical";
@@ -221,7 +342,6 @@ export class PaneManager {
       this.dragState = null;
       dividerHandle.style.background = "var(--border)";
 
-      // Callback to update the layout tree
       this.updateRatioInTree(node.id, newRatio);
     });
 
@@ -243,8 +363,8 @@ export class PaneManager {
 
     parent.appendChild(container);
 
-    this.buildNode(node.first, firstContainer);
-    this.buildNode(node.second, secondContainer);
+    this.buildNode(node.first, firstContainer, preservedInners, leafCount);
+    this.buildNode(node.second, secondContainer, preservedInners, leafCount);
   }
 
   private updateRatioInTree(splitId: string, newRatio: number) {
@@ -280,15 +400,11 @@ export class PaneManager {
 
   setActive(active: boolean) {
     this.active = active;
-    // When workspace is active, all leaves should stay PTY-attached
-    // When workspace is inactive, detach all leaves
     for (const session of this.sessions.values()) {
       session.setActive(active);
     }
-    // Focus the active leaf if workspace is active
     if (active) {
-      const activeLeafId = this.opts.getActiveLeafId();
-      this.focusLeaf(activeLeafId);
+      this.focusLeaf(this.opts.getActiveLeafId());
     }
   }
 

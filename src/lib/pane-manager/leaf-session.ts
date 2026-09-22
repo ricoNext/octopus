@@ -1,18 +1,9 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 
 import { api, invokeError } from "@/lib/api";
-
-type PtyDataEvent = {
-  id: string;
-  data: number[];
-};
-
-type PtyExitEvent = {
-  id: string;
-};
+import { subscribePtyData, subscribePtyExit } from "./pty-event-bus";
 
 type XtermMouseService = {
   getCoords: (
@@ -41,15 +32,19 @@ export class LeafSession {
   private container: HTMLElement;
   private sessionId: string;
   private cwdId: string;
-  private unlistenData?: UnlistenFn;
-  private unlistenExit?: UnlistenFn;
-  private ptyWriteQueue: Promise<void> = Promise.resolve();
+  private unsubscribeData?: () => void;
+  private unsubscribeExit?: () => void;
+  private writeBuffer = "";
+  private writeFlushScheduled = false;
   private restoreScrollback = true;
   private resizeObserver?: ResizeObserver;
+  private resizeRaf = 0;
   private themeObserver?: MutationObserver;
   private clickHandler?: (event: MouseEvent) => void;
   private active = false;
   private eventsReady = false;
+  /** True after a successful ptyOpen; kept across hide/show so switches stay warm. */
+  private ptyAttached = false;
 
   constructor(container: HTMLElement, sessionId: string, cwdId: string) {
     this.container = container;
@@ -104,33 +99,41 @@ export class LeafSession {
     });
   }
 
-  private async setupEventListeners() {
-    this.unlistenData = await listen<PtyDataEvent>("pty-data", (event) => {
-      if (event.payload.id !== this.sessionId) {
-        return;
-      }
-      const bytes = new Uint8Array(event.payload.data);
-      this.term.write(bytes);
+  private setupEventListeners() {
+    this.unsubscribeData = subscribePtyData(this.sessionId, (data) => {
+      this.term.write(data);
     });
 
-    this.unlistenExit = await listen<PtyExitEvent>("pty-exit", (event) => {
-      if (event.payload.id !== this.sessionId) {
-        return;
-      }
-      // Handle exit - for now just log
+    this.unsubscribeExit = subscribePtyExit(this.sessionId, () => {
       console.log("PTY exited:", this.sessionId);
     });
 
     this.eventsReady = true;
     if (this.active) {
-      this.openPty();
+      void this.openPty();
     }
   }
 
   private writePty(data: string) {
-    const write = this.ptyWriteQueue.then(() => api.ptyWrite(this.sessionId, data));
-    this.ptyWriteQueue = write.catch(() => undefined);
-    void write.catch((err) => console.error("ptyWrite error:", invokeError(err)));
+    // Coalesce consecutive keystrokes in one microtask (Orca input-queue idea),
+    // then fire one ptyWrite. Combined with Rust notify(), typing no longer waits
+    // on a per-keystroke daemon round-trip.
+    this.writeBuffer += data;
+    if (this.writeFlushScheduled) {
+      return;
+    }
+    this.writeFlushScheduled = true;
+    queueMicrotask(() => {
+      this.writeFlushScheduled = false;
+      const payload = this.writeBuffer;
+      this.writeBuffer = "";
+      if (!payload) {
+        return;
+      }
+      void api.ptyWrite(this.sessionId, payload).catch((err) => {
+        console.error("ptyWrite error:", invokeError(err));
+      });
+    });
   }
 
   private setupClickHandler() {
@@ -180,12 +183,40 @@ export class LeafSession {
     this.container.addEventListener("mousedown", this.clickHandler);
   }
 
-  private setupResizeObserver() {
-    this.resizeObserver = new ResizeObserver(() => {
+  private cancelResizeRaf() {
+    if (this.resizeRaf) {
+      cancelAnimationFrame(this.resizeRaf);
+      this.resizeRaf = 0;
+    }
+  }
+
+  private scheduleFitAndResize() {
+    if (this.resizeRaf) {
+      return;
+    }
+    this.resizeRaf = requestAnimationFrame(() => {
+      this.resizeRaf = 0;
       this.fit.fit();
       void api.ptyResize(this.sessionId, this.term.cols, this.term.rows).catch(() => undefined);
     });
+  }
+
+  private setupResizeObserver() {
+    if (this.resizeObserver) {
+      return;
+    }
+    this.resizeObserver = new ResizeObserver(() => {
+      this.scheduleFitAndResize();
+    });
     this.resizeObserver.observe(this.container);
+  }
+
+  private teardownResizeObserver() {
+    this.cancelResizeRaf();
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = undefined;
+    }
   }
 
   private async openPty() {
@@ -198,6 +229,7 @@ export class LeafSession {
     const rows = dims?.rows ?? this.term.rows;
     try {
       const attached = await api.ptyOpen(this.sessionId, this.cwdId, cols, rows);
+      this.ptyAttached = true;
       if (this.restoreScrollback && attached.scrollbackAnsi) {
         this.term.write(attached.scrollbackAnsi);
       }
@@ -217,17 +249,22 @@ export class LeafSession {
     if (active) {
       this.setupClickHandler();
       this.setupResizeObserver();
-      this.openPty();
+      // Keep PTY subscribed across sidebar switches (Orca-style warm park).
+      // Only open on first show; later shows just refit/focus.
+      if (!this.ptyAttached) {
+        void this.openPty();
+      } else {
+        this.scheduleFitAndResize();
+      }
+      this.focus();
     } else {
       if (this.clickHandler) {
         this.container.removeEventListener("mousedown", this.clickHandler);
         this.clickHandler = undefined;
       }
-      if (this.resizeObserver) {
-        this.resizeObserver.disconnect();
-        this.resizeObserver = undefined;
-      }
-      void api.ptyDetach(this.sessionId).catch(() => undefined);
+      this.teardownResizeObserver();
+      // Do not ptyDetach here — detach only on dispose. Detach+reattach on every
+      // menu switch made selection feel 1–2s delayed.
     }
   }
 
@@ -235,27 +272,28 @@ export class LeafSession {
     this.term.focus();
   }
 
+  /** Re-fit after the leaf container moved in the layout tree without remounting xterm. */
+  refit() {
+    if (!this.active) {
+      return;
+    }
+    this.scheduleFitAndResize();
+  }
+
   remount(newContainer: HTMLElement) {
-    // Clean up old container listeners
     if (this.clickHandler) {
       this.container.removeEventListener("mousedown", this.clickHandler);
       this.clickHandler = undefined;
     }
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = undefined;
-    }
+    this.teardownResizeObserver();
 
-    // Update container reference
     this.container = newContainer;
 
-    // Move the terminal element to the new container
     const terminalElement = this.term.element;
     if (terminalElement && terminalElement.parentElement) {
       newContainer.appendChild(terminalElement);
     }
 
-    // Re-fit and re-setup observers if active
     this.fit.fit();
     if (this.active) {
       this.setupClickHandler();
@@ -264,14 +302,20 @@ export class LeafSession {
   }
 
   dispose() {
+    if (this.writeBuffer) {
+      const payload = this.writeBuffer;
+      this.writeBuffer = "";
+      this.writeFlushScheduled = false;
+      void api.ptyWrite(this.sessionId, payload).catch(() => undefined);
+    }
     void api.ptyDetach(this.sessionId).catch(() => undefined);
     this.themeObserver?.disconnect();
-    this.resizeObserver?.disconnect();
+    this.teardownResizeObserver();
     if (this.clickHandler) {
       this.container.removeEventListener("mousedown", this.clickHandler);
     }
-    this.unlistenData?.();
-    this.unlistenExit?.();
+    this.unsubscribeData?.();
+    this.unsubscribeExit?.();
     this.term.dispose();
   }
 }

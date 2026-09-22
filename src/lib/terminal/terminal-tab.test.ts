@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   createTerminalTab,
+  nextTerminalTabIndex,
   migrateTerminalTab,
   migrateTabsByContext,
   sessionIdsForTab,
 } from "./terminal-tab";
 
 describe("terminal-tab", () => {
+  it("nextTerminalTabIndex reuses lowest free ordinal like Orca", () => {
+    expect(nextTerminalTabIndex(["终端 2"])).toBe(1);
+    expect(nextTerminalTabIndex(["终端 1", "终端 2"])).toBe(3);
+    expect(nextTerminalTabIndex(["终端 1", "终端 3"])).toBe(2);
+    expect(nextTerminalTabIndex(["自定义", "终端 5"])).toBe(1);
+    expect(nextTerminalTabIndex([])).toBe(1);
+  });
+
   it("createTerminalTab builds a single-leaf tab with matching session", () => {
     const tab = createTerminalTab(1);
     expect(tab.label).toBe("终端 1");

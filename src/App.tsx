@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -16,8 +17,10 @@ import {
   MoonIcon,
   SunIcon,
   Code2Icon,
+  Columns2Icon,
   InfoIcon,
   RefreshCwIcon,
+  Rows2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
@@ -58,9 +61,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, invokeError } from "@/lib/api";
 import { matchKeybinding } from "@/lib/keybindings";
-import { nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
+import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
   createTerminalTab,
+  nextTerminalTabIndex,
   migrateTabsByContext,
   sessionIdsForTab,
   type TerminalTab,
@@ -426,19 +430,26 @@ export default function App() {
     if (!stateHydrated) {
       return;
     }
-    try {
-      localStorage.setItem(
-        TERMINAL_STATE_KEY,
-        JSON.stringify({
-          version: 2,
-          selection,
-          tabsByContext,
-          activeTabByContext,
-        } satisfies PersistedTerminalState),
-      );
-    } catch {
-      // 本地存储不可用或已满时，终端仍可正常使用。
+    const payload = JSON.stringify({
+      version: 2,
+      selection,
+      tabsByContext,
+      activeTabByContext,
+    } satisfies PersistedTerminalState);
+    const persist = () => {
+      try {
+        localStorage.setItem(TERMINAL_STATE_KEY, payload);
+      } catch {
+        // 本地存储不可用或已满时，终端仍可正常使用。
+      }
+    };
+    // Defer so sidebar selection can paint before sync disk work.
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(persist, { timeout: 500 });
+      return () => cancelIdleCallback(id);
     }
+    const timer = window.setTimeout(persist, 0);
+    return () => window.clearTimeout(timer);
   }, [activeTabByContext, selection, stateHydrated, tabsByContext]);
 
   useEffect(() => {
@@ -529,74 +540,17 @@ export default function App() {
       }
 
       if (action === "terminal.splitRight") {
-        const newLeafId = crypto.randomUUID();
-        const splitId = crypto.randomUUID();
-        const layout = splitLeaf(tab.layout, tab.activeLeafId, "vertical", newLeafId, splitId);
-        setTabsByContext((current) => ({
-          ...current,
-          [selectedContextId]: tabs.map((item) =>
-            item.id === tab.id
-              ? {
-                  ...item,
-                  layout,
-                  activeLeafId: newLeafId,
-                  sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
-                }
-              : item,
-          ),
-        }));
+        splitActivePane("vertical");
         return;
       }
 
       if (action === "terminal.splitDown") {
-        const newLeafId = crypto.randomUUID();
-        const splitId = crypto.randomUUID();
-        const layout = splitLeaf(tab.layout, tab.activeLeafId, "horizontal", newLeafId, splitId);
-        setTabsByContext((current) => ({
-          ...current,
-          [selectedContextId]: tabs.map((item) =>
-            item.id === tab.id
-              ? {
-                  ...item,
-                  layout,
-                  activeLeafId: newLeafId,
-                  sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
-                }
-              : item,
-          ),
-        }));
+        splitActivePane("horizontal");
         return;
       }
 
       if (action === "terminal.closePane") {
-        const sessionId = tab.sessionByLeafId[tab.activeLeafId];
-        const layout = removeLeaf(tab.layout, tab.activeLeafId);
-
-        if (sessionId) {
-          void api.ptyKill(sessionId).catch(() => undefined);
-        }
-
-        if (!layout) {
-          // Last pane - close the tab
-          closeTerminalTab(tab.id);
-          return;
-        }
-
-        const { [tab.activeLeafId]: _, ...rest } = tab.sessionByLeafId;
-        const activeLeafId = nextLeafId(layout, tab.activeLeafId);
-        setTabsByContext((current) => ({
-          ...current,
-          [selectedContextId]: tabs.map((item) =>
-            item.id === tab.id
-              ? {
-                  ...item,
-                  layout,
-                  sessionByLeafId: rest,
-                  activeLeafId,
-                }
-              : item,
-          ),
-        }));
+        closePane(tab.activeLeafId);
         return;
       }
 
@@ -617,6 +571,71 @@ export default function App() {
   }, [view, selectedContextId, tabsByContext, activeTabByContext]);
 
   useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<string>("octopus://terminal-shortcut", (event) => {
+      switch (event.payload) {
+        case "splitRight":
+          splitActivePane("vertical");
+          break;
+        case "splitDown":
+          splitActivePane("horizontal");
+          break;
+        case "newTerminal":
+          addTerminalTab();
+          break;
+        case "focusNextPane": {
+          if (!selectedContextId) {
+            return;
+          }
+          const tabs = tabsByContext[selectedContextId] ?? [];
+          const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+          const tab = tabs.find((item) => item.id === currentActiveTabId);
+          if (!tab) {
+            return;
+          }
+          const activeLeafId = nextLeafId(tab.layout, tab.activeLeafId);
+          setTabsByContext((current) => ({
+            ...current,
+            [selectedContextId]: (current[selectedContextId] ?? []).map((item) =>
+              item.id === tab.id ? { ...item, activeLeafId } : item,
+            ),
+          }));
+          break;
+        }
+        case "closePane": {
+          if (!selectedContextId) {
+            return;
+          }
+          const tabs = tabsByContext[selectedContextId] ?? [];
+          const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+          const tab = tabs.find((item) => item.id === currentActiveTabId);
+          if (!tab) {
+            return;
+          }
+          closePane(tab.activeLeafId);
+          break;
+        }
+        default:
+          break;
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [selectedContextId, tabsByContext, activeTabByContext]);
+
+
+  useEffect(() => {
     activeTabElementRef.current?.scrollIntoView({
       behavior: "auto",
       block: "nearest",
@@ -629,12 +648,123 @@ export default function App() {
       return;
     }
     const tabs = tabsByContext[selectedContextId] ?? [];
-    const tab = createTerminalTab(tabs.length + 1);
+    const tab = createTerminalTab(nextTerminalTabIndex(tabs.map((item) => item.label)));
     setTabsByContext((current) => ({
       ...current,
       [selectedContextId]: [...(current[selectedContextId] ?? []), tab],
     }));
     setActiveTabByContext((current) => ({ ...current, [selectedContextId]: tab.id }));
+  }
+
+
+  function splitPane(
+    leafId: string,
+    direction: "horizontal" | "vertical",
+    tabId?: string,
+    contextId: string | null = selectedContextId,
+  ) {
+    if (!contextId) {
+      return;
+    }
+    const tabs = tabsByContext[contextId] ?? [];
+    const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
+    const resolvedTabId = tabId ?? currentActiveTabId;
+    const tab = tabs.find((item) => item.id === resolvedTabId);
+    if (!tab) {
+      return;
+    }
+    const leaves = listLeaves(tab.layout);
+    const targetLeafId = leaves.includes(leafId)
+      ? leafId
+      : leaves.includes(tab.activeLeafId)
+        ? tab.activeLeafId
+        : leaves[0];
+    if (!targetLeafId) {
+      toast.error("当前没有可分屏的终端");
+      return;
+    }
+    const newLeafId = crypto.randomUUID();
+    const splitId = crypto.randomUUID();
+    const layout = splitLeaf(tab.layout, targetLeafId, direction, newLeafId, splitId);
+    if (listLeaves(layout).length === leaves.length) {
+      toast.error("分屏失败，请再试一次");
+      return;
+    }
+    setTabsByContext((current) => ({
+      ...current,
+      [contextId]: (current[contextId] ?? []).map((item) =>
+        item.id === tab.id
+          ? {
+              ...item,
+              layout,
+              activeLeafId: newLeafId,
+              sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
+            }
+          : item,
+      ),
+    }));
+    setActiveTabByContext((current) => ({ ...current, [contextId]: tab.id }));
+  }
+
+  function splitActivePane(direction: "horizontal" | "vertical") {
+    if (!selectedContextId) {
+      return;
+    }
+    const tabs = tabsByContext[selectedContextId] ?? [];
+    const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+    const tab = tabs.find((item) => item.id === currentActiveTabId);
+    if (!tab) {
+      return;
+    }
+    splitPane(tab.activeLeafId, direction, tab.id, selectedContextId);
+  }
+
+  function closePane(
+    leafId: string,
+    tabId?: string,
+    contextId: string | null = selectedContextId,
+  ) {
+    if (!contextId) {
+      return;
+    }
+    const tabs = tabsByContext[contextId] ?? [];
+    const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
+    const resolvedTabId = tabId ?? currentActiveTabId;
+    const tab = tabs.find((item) => item.id === resolvedTabId);
+    if (!tab) {
+      return;
+    }
+    const leaves = listLeaves(tab.layout);
+    const targetLeafId = leaves.includes(leafId) ? leafId : tab.activeLeafId;
+    if (!leaves.includes(targetLeafId)) {
+      return;
+    }
+    const sessionId = tab.sessionByLeafId[targetLeafId];
+    const layout = removeLeaf(tab.layout, targetLeafId);
+    if (sessionId) {
+      void api.ptyKill(sessionId).catch(() => undefined);
+    }
+    if (!layout) {
+      closeTerminalTab(tab.id);
+      return;
+    }
+    const { [targetLeafId]: _, ...rest } = tab.sessionByLeafId;
+    const activeLeafId =
+      tab.activeLeafId === targetLeafId ? nextLeafId(layout, targetLeafId) : tab.activeLeafId;
+    setTabsByContext((current) => ({
+      ...current,
+      [contextId]: (current[contextId] ?? []).map((item) =>
+        item.id === tab.id
+          ? {
+              ...item,
+              layout,
+              sessionByLeafId: rest,
+              activeLeafId,
+            }
+          : item,
+      ),
+    }));
+    setActiveTabByContext((current) => ({ ...current, [contextId]: tab.id }));
   }
 
   function closeTerminalTabs(tabId: string, mode: TabCloseMode) {
@@ -1221,6 +1351,24 @@ export default function App() {
                 <PencilIcon />
                 重命名
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  splitActivePane("vertical");
+                  setTabContextMenu(null);
+                }}
+              >
+                <Columns2Icon />
+                向右分屏
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  splitActivePane("horizontal");
+                  setTabContextMenu(null);
+                }}
+              >
+                <Rows2Icon />
+                向下分屏
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={selectedTabs.length <= 1}
@@ -1298,6 +1446,12 @@ export default function App() {
                         item.id === tab.id ? nextTab : item,
                       ),
                     }));
+                  }}
+                  onSplitLeaf={(leafId, direction) => {
+                    splitPane(leafId, direction, tab.id, context.id);
+                  }}
+                  onCloseLeaf={(leafId) => {
+                    closePane(leafId, tab.id, context.id);
                   }}
                 />
               </div>

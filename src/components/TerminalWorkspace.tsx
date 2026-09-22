@@ -8,15 +8,28 @@ type TerminalWorkspaceProps = {
   cwdId: string;
   active: boolean;
   onChange: (next: TerminalTab) => void;
+  onSplitLeaf: (leafId: string, direction: "horizontal" | "vertical") => void;
+  onCloseLeaf: (leafId: string) => void;
 };
 
-export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWorkspaceProps) {
+export function TerminalWorkspace({
+  tab,
+  cwdId,
+  active,
+  onChange,
+  onSplitLeaf,
+  onCloseLeaf,
+}: TerminalWorkspaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<PaneManager | null>(null);
   const tabRef = useRef(tab);
   const onChangeRef = useRef(onChange);
+  const onSplitLeafRef = useRef(onSplitLeaf);
+  const onCloseLeafRef = useRef(onCloseLeaf);
   tabRef.current = tab;
   onChangeRef.current = onChange;
+  onSplitLeafRef.current = onSplitLeaf;
+  onCloseLeafRef.current = onCloseLeaf;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -35,6 +48,12 @@ export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWork
         onRatioChange: (layout) => {
           onChangeRef.current({ ...tabRef.current, layout });
         },
+        onSplitLeaf: (leafId, direction) => {
+          onSplitLeafRef.current(leafId, direction);
+        },
+        onCloseLeaf: (leafId) => {
+          onCloseLeafRef.current(leafId);
+        },
       },
     });
     managerRef.current = manager;
@@ -51,8 +70,11 @@ export function TerminalWorkspace({ tab, cwdId, active, onChange }: TerminalWork
 
   useEffect(() => {
     managerRef.current?.syncLayout();
+  }, [tab.layout, tab.sessionByLeafId]);
+
+  useEffect(() => {
     managerRef.current?.focusLeaf(tab.activeLeafId);
-  }, [tab.layout, tab.activeLeafId, tab.sessionByLeafId]);
+  }, [tab.activeLeafId]);
 
   return <div ref={hostRef} className="h-full min-h-0 w-full" />;
 }

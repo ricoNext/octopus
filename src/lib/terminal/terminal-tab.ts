@@ -8,6 +8,32 @@ export type TerminalTab = {
   sessionByLeafId: Record<string, string>;
 };
 
+/** Matches Orca getNextTerminalOrdinal: /^Terminal (\d+)$/ against default titles. */
+const DEFAULT_TAB_LABEL = /^终端\s+(\d+)$/;
+
+/**
+ * Lowest unused "终端 N" index among existing labels (Orca-style).
+ * Closing "终端 1" while "终端 2" remains yields 1 for the next tab, not 2 or 3.
+ */
+export function nextTerminalTabIndex(labels: readonly string[]): number {
+  const used = new Set<number>();
+  for (const label of labels) {
+    const match = DEFAULT_TAB_LABEL.exec(label.trim());
+    if (!match) {
+      continue;
+    }
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && value >= 1) {
+      used.add(value);
+    }
+  }
+  let next = 1;
+  while (used.has(next)) {
+    next += 1;
+  }
+  return next;
+}
+
 export function createTerminalTab(index: number): TerminalTab {
   const tabId = crypto.randomUUID();
   const leafId = crypto.randomUUID();

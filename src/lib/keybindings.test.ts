@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { matchKeybinding } from "./keybindings";
 
-function key(partial: Partial<KeyboardEvent> & { key: string }) {
+function key(partial: Partial<KeyboardEvent> & { key: string; code?: string }) {
   return {
     key: partial.key,
+    code: partial.code,
     metaKey: Boolean(partial.metaKey),
     ctrlKey: Boolean(partial.ctrlKey),
     shiftKey: Boolean(partial.shiftKey),
@@ -21,6 +22,12 @@ describe("matchKeybinding", () => {
     expect(matchKeybinding(key({ key: "w", metaKey: true }))).toBe("terminal.closePane");
     expect(matchKeybinding(key({ key: "]", metaKey: true }))).toBe("terminal.focusNextPane");
     expect(matchKeybinding(key({ key: "b", metaKey: true }))).toBe("sidebar.toggle");
+  });
+
+  it("matches by event.code when key is non-latin", () => {
+    expect(matchKeybinding(key({ key: "∂", code: "KeyD", metaKey: true }))).toBe(
+      "terminal.splitRight",
+    );
   });
 
   it("returns null for unmatched", () => {
