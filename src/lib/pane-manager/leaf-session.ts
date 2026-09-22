@@ -235,6 +235,34 @@ export class LeafSession {
     this.term.focus();
   }
 
+  remount(newContainer: HTMLElement) {
+    // Clean up old container listeners
+    if (this.clickHandler) {
+      this.container.removeEventListener("mousedown", this.clickHandler);
+      this.clickHandler = undefined;
+    }
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = undefined;
+    }
+
+    // Update container reference
+    this.container = newContainer;
+
+    // Move the terminal element to the new container
+    const terminalElement = this.term.element;
+    if (terminalElement && terminalElement.parentElement) {
+      newContainer.appendChild(terminalElement);
+    }
+
+    // Re-fit and re-setup observers if active
+    this.fit.fit();
+    if (this.active) {
+      this.setupClickHandler();
+      this.setupResizeObserver();
+    }
+  }
+
   dispose() {
     void api.ptyDetach(this.sessionId).catch(() => undefined);
     this.themeObserver?.disconnect();

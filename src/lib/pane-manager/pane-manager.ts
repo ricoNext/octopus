@@ -47,7 +47,6 @@ export class PaneManager {
           session.dispose();
           this.sessions.delete(leafId);
         }
-        this.leafContainers.delete(leafId);
       }
     }
 
@@ -56,27 +55,31 @@ export class PaneManager {
     this.leafContainers.clear();
     this.buildNode(layout, this.host);
 
-    // Create new sessions for new leaves
+    // Remount existing sessions and create new ones
     for (const leafId of currentLeaves) {
-      if (!this.sessions.has(leafId)) {
-        const container = this.leafContainers.get(leafId);
-        if (container) {
-          const sessionId = this.opts.getSessionId(leafId);
-          const session = new LeafSession(container, sessionId, this.opts.cwdId);
-          this.sessions.set(leafId, session);
-          if (this.active) {
-            session.setActive(true);
-          }
+      const container = this.leafContainers.get(leafId);
+      if (!container) {
+        continue;
+      }
+
+      if (this.sessions.has(leafId)) {
+        // Remount existing session to new container
+        const session = this.sessions.get(leafId)!;
+        session.remount(container);
+      } else {
+        // Create new session for new leaf
+        const sessionId = this.opts.getSessionId(leafId);
+        const session = new LeafSession(container, sessionId, this.opts.cwdId);
+        this.sessions.set(leafId, session);
+        if (this.active) {
+          session.setActive(true);
         }
       }
     }
 
-    // Update active states
+    // Focus the active leaf
     const activeLeafId = this.opts.getActiveLeafId();
-    for (const [leafId, session] of this.sessions) {
-      const isActive = leafId === activeLeafId;
-      session.setActive(this.active && isActive);
-    }
+    this.focusLeaf(activeLeafId);
   }
 
   private buildNode(node: PaneLayoutNode, parent: HTMLElement) {
@@ -277,10 +280,15 @@ export class PaneManager {
 
   setActive(active: boolean) {
     this.active = active;
-    const activeLeafId = this.opts.getActiveLeafId();
-    for (const [leafId, session] of this.sessions) {
-      const isActive = leafId === activeLeafId;
-      session.setActive(active && isActive);
+    // When workspace is active, all leaves should stay PTY-attached
+    // When workspace is inactive, detach all leaves
+    for (const session of this.sessions.values()) {
+      session.setActive(active);
+    }
+    // Focus the active leaf if workspace is active
+    if (active) {
+      const activeLeafId = this.opts.getActiveLeafId();
+      this.focusLeaf(activeLeafId);
     }
   }
 
