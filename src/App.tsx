@@ -71,6 +71,12 @@ import {
   sessionIdsForTab,
   type TerminalTab,
 } from "@/lib/terminal/terminal-tab";
+import { isTerminalWarmRetainEnabled } from "@/lib/terminal/terminal-feature-flags";
+import { setTerminalMetric } from "@/lib/terminal/terminal-metrics";
+import {
+  selectWarmMountKeys,
+  warmMountKey,
+} from "@/lib/terminal/warm-retain";
 import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
@@ -245,6 +251,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
   const [selection, setSelection] = useState<Selection>(persistedState.selection ?? { kind: "empty" });
   const [visited, setVisited] = useState<string[]>([]);
+  const [tabActivationOrder, setTabActivationOrder] = useState<string[]>([]);
   const [tabsByContext, setTabsByContext] = useState<Record<string, TerminalTab[]>>(
     persistedState.tabsByContext ?? {},
   );
@@ -412,7 +419,7 @@ export default function App() {
     if (focusedWorktreeId) {
       setSelection({ kind: "worktree", worktreeId: focusedWorktreeId });
       setVisited((current) =>
-        current.includes(focusedWorktreeId) ? current : [...current, focusedWorktreeId],
+        [...current.filter((id) => id !== focusedWorktreeId), focusedWorktreeId],
       );
       return;
     }
@@ -437,15 +444,11 @@ export default function App() {
         setSelection(initialSelection);
         if (initialSelection.kind === "main") {
           setVisited((current) =>
-            current.includes(initialSelection.projectId)
-              ? current
-              : [...current, initialSelection.projectId],
+            [...current.filter((id) => id !== initialSelection.projectId), initialSelection.projectId],
           );
         } else if (initialSelection.kind === "worktree") {
           setVisited((current) =>
-            current.includes(initialSelection.worktreeId)
-              ? current
-              : [...current, initialSelection.worktreeId],
+            [...current.filter((id) => id !== initialSelection.worktreeId), initialSelection.worktreeId],
           );
         }
         setStateHydrated(true);
@@ -482,16 +485,27 @@ export default function App() {
   useEffect(() => {
     if (selection.kind === "worktree") {
       setVisited((current) =>
-        current.includes(selection.worktreeId) ? current : [...current, selection.worktreeId],
+        [...current.filter((id) => id !== selection.worktreeId), selection.worktreeId],
       );
       return;
     }
     if (selection.kind === "main") {
       setVisited((current) =>
-        current.includes(selection.projectId) ? current : [...current, selection.projectId],
+        [...current.filter((id) => id !== selection.projectId), selection.projectId],
       );
     }
   }, [selection]);
+
+  useEffect(() => {
+    if (!selectedContextId || !activeTabId) {
+      return;
+    }
+    const key = warmMountKey(selectedContextId, activeTabId);
+    setTabActivationOrder((current) => [
+      ...current.filter((item) => item !== key),
+      key,
+    ]);
+  }, [selectedContextId, activeTabId]);
 
   useEffect(() => {
     if (!selectedContextId) {
@@ -1067,6 +1081,25 @@ export default function App() {
     }
   }
 
+  async function handleRefreshProjectWorktrees(projectId: string) {
+    try {
+      const result = await api.refreshProjectWorktrees(projectId);
+      applySnapshot(result.snapshot);
+      if (result.removed.length === 0 && result.imported.length === 0) {
+        toast.message("工作树列表已是最新");
+      } else {
+        if (result.removed.length > 0) {
+          toast.message(`已移除丢失的工作树：${result.removed.join("、")}`);
+        }
+        if (result.imported.length > 0) {
+          toast.message(`已导入新工作树：${result.imported.join("、")}`);
+        }
+      }
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
   async function handleRemoveProject(projectId: string, forget: boolean) {
     try {
       const result = await api.removeProject(projectId, forget);
@@ -1122,6 +1155,30 @@ export default function App() {
       <PlusIcon />
     </Button>
   );
+  const warmRetainEnabled = isTerminalWarmRetainEnabled();
+  const warmMountKeys = useMemo(
+    () =>
+      selectWarmMountKeys({
+        enabled: warmRetainEnabled,
+        visitedOldestToNewest: visited,
+        selectedContextId,
+        tabsByContext,
+        activeTabByContext,
+        tabActivationOldestToNewest: tabActivationOrder,
+      }),
+    [
+      warmRetainEnabled,
+      visited,
+      selectedContextId,
+      tabsByContext,
+      activeTabByContext,
+      tabActivationOrder,
+    ],
+  );
+  setTerminalMetric("visitedCount", visited.length);
+  setTerminalMetric("warmKeyCount", warmMountKeys.size);
+  setTerminalMetric("mountedWorkspaceCount", warmMountKeys.size);
+
   const visitedReady = visited
     .map((id) => worktrees.find((item) => item.id === id))
     .filter((item): item is Worktree => Boolean(item && item.status === "ready" && !item.missing));
@@ -1165,6 +1222,9 @@ export default function App() {
             void openCreate(projectId, startFromBranch)
           }
           onRemoveProject={(projectId) => void handleRemoveProject(projectId, false)}
+          onRefreshProjectWorktrees={(projectId) =>
+            void handleRefreshProjectWorktrees(projectId)
+          }
           onDeleteWorktree={(worktreeId) => {
             const target = worktrees.find((item) => item.id === worktreeId);
             if (target) {
@@ -1453,36 +1513,41 @@ export default function App() {
             </div>
             <div className="relative min-h-0 flex-1">
           {terminalContexts.flatMap((context) =>
-            (tabsByContext[context.id] ?? []).map((tab) => (
-              <div
-                key={tab.id}
-                className={
-                  selectedContextId === context.id && activeTabId === tab.id
-                    ? "absolute inset-0"
-                    : "pointer-events-none invisible absolute inset-0"
-                }
-              >
-                <TerminalWorkspace
-                  tab={tab}
-                  cwdId={context.cwdId}
-                  active={selectedContextId === context.id && activeTabId === tab.id}
-                  onChange={(nextTab) => {
-                    setTabsByContext((current) => ({
-                      ...current,
-                      [context.id]: (current[context.id] ?? []).map((item) =>
-                        item.id === tab.id ? nextTab : item,
-                      ),
-                    }));
-                  }}
-                  onSplitLeaf={(leafId, direction) => {
-                    splitPane(leafId, direction, tab.id, context.id);
-                  }}
-                  onCloseLeaf={(leafId) => {
-                    closePane(leafId, tab.id, context.id);
-                  }}
-                />
-              </div>
-            )),
+            (tabsByContext[context.id] ?? []).flatMap((tab) => {
+              if (!warmMountKeys.has(warmMountKey(context.id, tab.id))) {
+                return [];
+              }
+              return [
+                <div
+                  key={`${context.id}::${tab.id}`}
+                  className={
+                    selectedContextId === context.id && activeTabId === tab.id
+                      ? "absolute inset-0"
+                      : "pointer-events-none invisible absolute inset-0"
+                  }
+                >
+                  <TerminalWorkspace
+                    tab={tab}
+                    cwdId={context.cwdId}
+                    active={selectedContextId === context.id && activeTabId === tab.id}
+                    onChange={(nextTab) => {
+                      setTabsByContext((current) => ({
+                        ...current,
+                        [context.id]: (current[context.id] ?? []).map((item) =>
+                          item.id === tab.id ? nextTab : item,
+                        ),
+                      }));
+                    }}
+                    onSplitLeaf={(leafId, direction) => {
+                      splitPane(leafId, direction, tab.id, context.id);
+                    }}
+                    onCloseLeaf={(leafId) => {
+                      closePane(leafId, tab.id, context.id);
+                    }}
+                  />
+                </div>,
+              ];
+            }),
           )}
           {!showTerminal ? (
             <div className="absolute inset-0 flex items-center justify-center p-6">

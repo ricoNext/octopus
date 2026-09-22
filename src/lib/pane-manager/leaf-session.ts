@@ -9,6 +9,7 @@ import {
 } from "@/lib/terminal/xterm-options";
 
 import { api, invokeError } from "@/lib/api";
+import { bumpTerminalMetric } from "@/lib/terminal/terminal-metrics";
 import { subscribePtyData, subscribePtyExit } from "./pty-event-bus";
 
 type XtermMouseService = {
@@ -227,6 +228,7 @@ export class LeafSession {
     try {
       const attached = await api.ptyOpen(this.sessionId, this.cwdId, cols, rows);
       this.ptyAttached = true;
+      bumpTerminalMetric("ptyOpen");
       if (this.restoreScrollback && attached.scrollbackAnsi) {
         this.term.write(attached.scrollbackAnsi);
       }
@@ -244,6 +246,7 @@ export class LeafSession {
     this.active = active;
 
     if (active) {
+      bumpTerminalMetric("leafActive");
       this.setupClickHandler();
       this.setupResizeObserver();
       // Keep PTY subscribed across sidebar switches (Orca-style warm park).
@@ -255,6 +258,7 @@ export class LeafSession {
       }
       this.focus();
     } else {
+      bumpTerminalMetric("leafInactive");
       if (this.clickHandler) {
         this.container.removeEventListener("mousedown", this.clickHandler);
         this.clickHandler = undefined;
@@ -299,6 +303,7 @@ export class LeafSession {
   }
 
   dispose() {
+    bumpTerminalMetric("leafDispose");
     if (this.writeBuffer) {
       const payload = this.writeBuffer;
       this.writeBuffer = "";
