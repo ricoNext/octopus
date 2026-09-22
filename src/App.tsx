@@ -24,7 +24,7 @@ import { toast } from "sonner";
 
 import { CopyableError } from "@/components/CopyableError";
 import { Sidebar } from "@/components/Sidebar";
-import { TerminalPane } from "@/components/TerminalPane";
+import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import {
   AlertDialog,
@@ -57,6 +57,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, invokeError } from "@/lib/api";
+import { matchKeybinding } from "@/lib/keybindings";
+import { nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
   createTerminalTab,
   migrateTabsByContext,
@@ -315,24 +317,6 @@ export default function App() {
   }, [sidebarWidth]);
 
   useEffect(() => {
-    function handleSidebarShortcut(event: KeyboardEvent) {
-      if (view === "settings") {
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
-        const target = event.target;
-        if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true']")) {
-          return;
-        }
-        event.preventDefault();
-        setSidebarCollapsed((current) => !current);
-      }
-    }
-    window.addEventListener("keydown", handleSidebarShortcut);
-    return () => window.removeEventListener("keydown", handleSidebarShortcut);
-  }, [view]);
-
-  useEffect(() => {
     document.body.style.cursor = isResizingSidebar ? "col-resize" : "";
     document.body.style.userSelect = isResizingSidebar ? "none" : "";
     return () => {
@@ -498,6 +482,139 @@ export default function App() {
       setRenameTabTarget(null);
     }
   }, [renameTabTarget, selectedContextId]);
+
+  useEffect(() => {
+    function isEditableTarget(target: EventTarget | null): boolean {
+      return (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, [contenteditable='true']") !== null
+      );
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (view === "settings") {
+        return;
+      }
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const action = matchKeybinding(event);
+      if (!action) {
+        return;
+      }
+
+      if (action === "sidebar.toggle") {
+        event.preventDefault();
+        setSidebarCollapsed((current) => !current);
+        return;
+      }
+
+      if (!selectedContextId) {
+        return;
+      }
+
+      const tabs = tabsByContext[selectedContextId] ?? [];
+      const activeTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
+      const tab = tabs.find((item) => item.id === activeTabId);
+      if (!tab) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (action === "tab.newTerminal") {
+        addTerminalTab();
+        return;
+      }
+
+      if (action === "terminal.splitRight") {
+        const newLeafId = crypto.randomUUID();
+        const splitId = crypto.randomUUID();
+        const layout = splitLeaf(tab.layout, tab.activeLeafId, "vertical", newLeafId, splitId);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: tabs.map((item) =>
+            item.id === tab.id
+              ? {
+                  ...item,
+                  layout,
+                  activeLeafId: newLeafId,
+                  sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
+                }
+              : item,
+          ),
+        }));
+        return;
+      }
+
+      if (action === "terminal.splitDown") {
+        const newLeafId = crypto.randomUUID();
+        const splitId = crypto.randomUUID();
+        const layout = splitLeaf(tab.layout, tab.activeLeafId, "horizontal", newLeafId, splitId);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: tabs.map((item) =>
+            item.id === tab.id
+              ? {
+                  ...item,
+                  layout,
+                  activeLeafId: newLeafId,
+                  sessionByLeafId: { ...item.sessionByLeafId, [newLeafId]: newLeafId },
+                }
+              : item,
+          ),
+        }));
+        return;
+      }
+
+      if (action === "terminal.closePane") {
+        const sessionId = tab.sessionByLeafId[tab.activeLeafId];
+        const layout = removeLeaf(tab.layout, tab.activeLeafId);
+
+        if (sessionId) {
+          void api.ptyKill(sessionId).catch(() => undefined);
+        }
+
+        if (!layout) {
+          // Last pane - close the tab
+          closeTerminalTab(tab.id);
+          return;
+        }
+
+        const { [tab.activeLeafId]: _, ...rest } = tab.sessionByLeafId;
+        const activeLeafId = nextLeafId(layout, tab.activeLeafId);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: tabs.map((item) =>
+            item.id === tab.id
+              ? {
+                  ...item,
+                  layout,
+                  sessionByLeafId: rest,
+                  activeLeafId,
+                }
+              : item,
+          ),
+        }));
+        return;
+      }
+
+      if (action === "terminal.focusNextPane") {
+        const activeLeafId = nextLeafId(tab.layout, tab.activeLeafId);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: tabs.map((item) =>
+            item.id === tab.id ? { ...item, activeLeafId } : item,
+          ),
+        }));
+        return;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [view, selectedContextId, tabsByContext, activeTabByContext]);
 
   useEffect(() => {
     activeTabElementRef.current?.scrollIntoView({
@@ -1170,10 +1287,18 @@ export default function App() {
                     : "pointer-events-none invisible absolute inset-0"
                 }
               >
-                <TerminalPane
-                  sessionId={tab.sessionByLeafId[tab.activeLeafId] ?? tab.activeLeafId}
+                <TerminalWorkspace
+                  tab={tab}
                   cwdId={context.cwdId}
                   active={selectedContextId === context.id && activeTabId === tab.id}
+                  onChange={(nextTab) => {
+                    setTabsByContext((current) => ({
+                      ...current,
+                      [context.id]: (current[context.id] ?? []).map((item) =>
+                        item.id === tab.id ? nextTab : item,
+                      ),
+                    }));
+                  }}
                 />
               </div>
             )),
