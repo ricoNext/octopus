@@ -1,5 +1,11 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+
+import {
+  attachUnicode11,
+  buildTerminalOptions,
+  terminalThemes,
+} from "@/lib/terminal/xterm-options";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -38,11 +44,6 @@ type XtermWithCore = Terminal & {
   };
 };
 
-const terminalThemes = {
-  light: { background: "#ffffff", foreground: "#18181b", cursor: "#18181b" },
-  dark: { background: "#141414", foreground: "#f4f4f5", cursor: "#f4f4f5" },
-} as const;
-
 export function TerminalPane({ sessionId, cwdId, active }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -78,14 +79,10 @@ export function TerminalPane({ sessionId, cwdId, active }: TerminalPaneProps) {
     if (!container) {
       return;
     }
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
-      theme: darkThemeRef.current ? terminalThemes.dark : terminalThemes.light,
-    });
+    const term = new Terminal(buildTerminalOptions(darkThemeRef.current));
     const fit = new FitAddon();
     term.loadAddon(fit);
+    attachUnicode11(term);
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;
@@ -281,7 +278,7 @@ export function TerminalPane({ sessionId, cwdId, active }: TerminalPaneProps) {
 
   return (
     <div className="relative h-full min-h-0 bg-background">
-      <div ref={containerRef} className="h-full min-h-0 p-2" />
+      <div ref={containerRef} className="h-full min-h-0" />
       {exited ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/80">
           <p className="text-sm">终端已结束</p>

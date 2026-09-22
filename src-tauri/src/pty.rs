@@ -652,6 +652,14 @@ fn spawn_session(
     command.arg("-l");
     command.cwd(&cwd);
     command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    // Prefer UTF-8 so TUI box-drawing / CJK match native Terminal.app.
+    if std::env::var_os("LANG").is_none() {
+        command.env("LANG", "en_US.UTF-8");
+    }
+    if std::env::var_os("LC_ALL").is_none() && std::env::var_os("LC_CTYPE").is_none() {
+        command.env("LC_CTYPE", "UTF-8");
+    }
     let mut child = pair.slave.spawn_command(command).map_err(|err| format!("无法启动登录壳：{err}"))?;
     let reader = pair.master.try_clone_reader().map_err(|err| format!("无法读取终端：{err}"))?;
     let writer = pair.master.take_writer().map_err(|err| format!("无法写入终端：{err}"))?;

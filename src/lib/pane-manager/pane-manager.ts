@@ -81,6 +81,20 @@ export class PaneManager {
   constructor(host: HTMLElement, opts: PaneManagerOptions) {
     this.host = host;
     this.opts = opts;
+    // Orca-style: root must be a sized flex container so a single leaf's
+    // `flex: 1` actually receives a definite height. Without this, .xterm
+    // height:100% collapses to content height, the leaf `overflow:hidden`
+    // clips scrollback, and the viewport cannot scroll.
+    host.classList.add("pane-manager-root");
+    host.style.cssText = [
+      "display: flex",
+      "flex-direction: column",
+      "width: 100%",
+      "height: 100%",
+      "min-width: 0",
+      "min-height: 0",
+      "overflow: hidden",
+    ].join(";");
   }
 
   syncLayout() {
@@ -149,7 +163,9 @@ export class PaneManager {
     container.dataset.leafId = leafId;
     container.style.cssText = `
       position: relative;
-      flex: 1;
+      flex: 1 1 0;
+      width: 100%;
+      height: 100%;
       min-width: 0;
       min-height: 0;
       overflow: hidden;
@@ -219,13 +235,18 @@ export class PaneManager {
     let inner = preservedInners.get(leafId);
     if (!inner) {
       inner = document.createElement("div");
-      inner.style.cssText = `
+    }
+    // Always refresh host chrome: FitAddon sizes from parent CSS height and only
+    // subtracts padding on the .xterm element itself — parent padding is ignored
+    // and gets covered. Leave this host unpadded; bottom inset lives on .xterm.
+    inner.style.cssText = `
+      box-sizing: border-box;
       width: 100%;
       height: 100%;
-      padding: 0.5rem;
+      padding: 0;
+      margin: 0;
       background: var(--background);
     `;
-    }
     container.appendChild(inner);
     parent.appendChild(container);
 

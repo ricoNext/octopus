@@ -8,6 +8,7 @@ import {
   FolderOpenIcon,
   PencilIcon,
   PanelLeftOpenIcon,
+  PanelRightOpenIcon,
   PanelTopCloseIcon,
   PlusIcon,
   XIcon,
@@ -26,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { toast } from "sonner";
 
 import { CopyableError } from "@/components/CopyableError";
+import { RightPanel } from "@/components/RightPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
@@ -108,6 +110,8 @@ const SIDEBAR_WIDTH_KEY = "octopus.sidebar.width";
 const DEFAULT_SIDEBAR_WIDTH = 288;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
+const RIGHT_RAIL_WIDTH_KEY = "octopus.right-rail.width";
+const DEFAULT_RIGHT_RAIL_WIDTH = 280;
 const THEME_KEY = "octopus.theme";
 const DEFAULT_EDITOR_KEY = "octopus.default-editor";
 type ThemePreference = "light" | "dark" | "system";
@@ -175,6 +179,15 @@ function readSidebarWidth(): number {
       : DEFAULT_SIDEBAR_WIDTH;
   } catch {
     return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
+
+function readRightRailWidth(): number {
+  try {
+    const value = Number(localStorage.getItem(RIGHT_RAIL_WIDTH_KEY));
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_RIGHT_RAIL_WIDTH;
+  } catch {
+    return DEFAULT_RIGHT_RAIL_WIDTH;
   }
 }
 
@@ -252,6 +265,11 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const sidebarShellRef = useRef<HTMLDivElement | null>(null);
   const resizePointerRef = useRef<{ pointerId: number } | null>(null);
+  const [rightRailWidth, setRightRailWidth] = useState(readRightRailWidth);
+  const [isResizingRightRail, setIsResizingRightRail] = useState(false);
+  const [rightRailCollapsed, setRightRailCollapsed] = useState(false);
+  const rightRailShellRef = useRef<HTMLDivElement | null>(null);
+  const rightRailResizePointerRef = useRef<{ pointerId: number } | null>(null);
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
@@ -321,13 +339,22 @@ export default function App() {
   }, [sidebarWidth]);
 
   useEffect(() => {
-    document.body.style.cursor = isResizingSidebar ? "col-resize" : "";
-    document.body.style.userSelect = isResizingSidebar ? "none" : "";
+    try {
+      localStorage.setItem(RIGHT_RAIL_WIDTH_KEY, String(rightRailWidth));
+    } catch {
+      // 本地存储不可用时，宽度仍可在当前会话中正常调整。
+    }
+  }, [rightRailWidth]);
+
+  useEffect(() => {
+    const resizing = isResizingSidebar || isResizingRightRail;
+    document.body.style.cursor = resizing ? "col-resize" : "";
+    document.body.style.userSelect = resizing ? "none" : "";
     return () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizingSidebar]);
+  }, [isResizingSidebar, isResizingRightRail]);
 
   const projects = snapshot.projects;
   const worktrees = snapshot.worktrees;
@@ -1478,6 +1505,92 @@ export default function App() {
           </>
         )}
       </main>
+
+      {view === "workspace" ? (
+        <div
+          ref={rightRailShellRef}
+          className={
+            rightRailCollapsed
+              ? "relative h-full min-h-0 w-0 shrink-0 overflow-visible"
+              : "relative flex h-full min-h-0 shrink-0 flex-col overflow-visible"
+          }
+          style={{ width: rightRailCollapsed ? 0 : rightRailWidth }}
+        >
+          {rightRailCollapsed ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="absolute top-1 right-2 z-30 border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar-accent"
+              onClick={() => setRightRailCollapsed(false)}
+              aria-label="展开右侧栏"
+              title="展开右侧栏"
+            >
+              <PanelRightOpenIcon />
+            </Button>
+          ) : (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整右侧栏宽度"
+                aria-valuenow={rightRailWidth}
+                tabIndex={0}
+                className={cn(
+                  "group absolute -left-1.5 top-0 z-20 flex h-full w-3 touch-none cursor-col-resize items-stretch justify-center outline-none",
+                  isResizingRightRail && "cursor-col-resize",
+                )}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  rightRailResizePointerRef.current = { pointerId: event.pointerId };
+                  setIsResizingRightRail(true);
+                }}
+                onPointerMove={(event) => {
+                  if (rightRailResizePointerRef.current?.pointerId !== event.pointerId) {
+                    return;
+                  }
+                  const nextWidth = Math.max(0, window.innerWidth - event.clientX);
+                  if (rightRailShellRef.current) {
+                    rightRailShellRef.current.style.width = `${nextWidth}px`;
+                  }
+                }}
+                onPointerUp={(event) => {
+                  if (rightRailResizePointerRef.current?.pointerId !== event.pointerId) {
+                    return;
+                  }
+                  const nextWidth =
+                    rightRailShellRef.current?.getBoundingClientRect().width ?? rightRailWidth;
+                  rightRailResizePointerRef.current = null;
+                  setIsResizingRightRail(false);
+                  setRightRailWidth(Math.round(nextWidth));
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }}
+                onPointerCancel={() => {
+                  rightRailResizePointerRef.current = null;
+                  setIsResizingRightRail(false);
+                }}
+                onKeyDown={(event) => {
+                  const step = event.shiftKey ? 32 : 16;
+                  if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    setRightRailWidth((current) => Math.max(0, current + step));
+                  } else if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    setRightRailWidth((current) => Math.max(0, current - step));
+                  }
+                }}
+              >
+                <span className="h-full w-px bg-border/80 transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary/70" />
+              </div>
+              <RightPanel
+                onCollapse={() => setRightRailCollapsed(true)}
+                startWindowDrag={startWindowDrag}
+                contextId={selectedContextId}
+              />
+            </>
+          )}
+        </div>
+      ) : null}
 
       <Dialog
         open={Boolean(renameTabTarget)}

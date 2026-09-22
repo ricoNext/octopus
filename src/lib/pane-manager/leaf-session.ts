@@ -2,6 +2,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+import {
+  attachUnicode11,
+  buildTerminalOptions,
+  terminalThemes,
+} from "@/lib/terminal/xterm-options";
+
 import { api, invokeError } from "@/lib/api";
 import { subscribePtyData, subscribePtyExit } from "./pty-event-bus";
 
@@ -20,11 +26,6 @@ type XtermWithCore = Terminal & {
     _mouseService?: XtermMouseService;
   };
 };
-
-const terminalThemes = {
-  light: { background: "#ffffff", foreground: "#18181b", cursor: "#18181b" },
-  dark: { background: "#141414", foreground: "#f4f4f5", cursor: "#f4f4f5" },
-} as const;
 
 export class LeafSession {
   private term: Terminal;
@@ -52,14 +53,10 @@ export class LeafSession {
     this.cwdId = cwdId;
 
     const dark = document.documentElement.classList.contains("dark");
-    this.term = new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
-      theme: dark ? terminalThemes.dark : terminalThemes.light,
-    });
+    this.term = new Terminal(buildTerminalOptions(dark));
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
+    attachUnicode11(this.term);
     this.term.open(container);
 
     queueMicrotask(() => this.fit.fit());

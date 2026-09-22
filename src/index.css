@@ -133,9 +133,34 @@
   }
 }
 
-.xterm,
-.xterm-viewport {
+/* Terminal fills its leaf; viewport scrolls scrollback (Orca-aligned).
+   Bottom/side inset MUST be padding on .xterm itself: @xterm/addon-fit only
+   subtracts the terminal element's padding when computing rows/cols. Padding on
+   the parent is ignored and the grid paints over it. */
+.pane-manager-root .xterm,
+.xterm {
+  box-sizing: border-box;
+  width: 100%;
   height: 100%;
+  padding: 0 12px 100px 12px;
+}
+
+.pane-manager-root .xterm-viewport,
+.xterm .xterm-viewport {
+  /* Keep gutter stable; auto can jitter resize on some platforms. */
+  overflow-y: scroll;
+}
+
+/* xterm.css hard-codes viewport background to #000 for opaque macOS scrollbars.
+   Let the themed .xterm background show through. */
+.xterm:not(.allow-transparency) .xterm-viewport {
+  background-color: transparent;
+}
+
+/* xterm 6 custom scrollbar (SmoothScrollableElement). Colors come from theme
+   scrollbarSlider*; round the thumb here. */
+.xterm .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: 4px;
 }
 
 .titlebar-traffic-light-pad {
