@@ -11,6 +11,7 @@ import {
   listVisibleRightRailModules,
 } from "@/components/right-rail/registry";
 import type { RightRailModuleId } from "@/components/right-rail/types";
+import type { AgentRowView } from "@/lib/agents/types";
 
 const ACTIVE_MODULE_KEY = "octopus.right-rail.active-module";
 
@@ -19,6 +20,8 @@ type RightPanelProps = {
   startWindowDrag: (event: MouseEvent<HTMLElement>) => void;
   /** Current project/worktree context id for module visibility. */
   contextId?: string | null;
+  agentRows?: AgentRowView[];
+  onFocusAgent?: (sessionId: string) => void;
 };
 
 function readActiveModuleId(): RightRailModuleId {
@@ -37,8 +40,13 @@ export function RightPanel({
   onCollapse,
   startWindowDrag,
   contextId = null,
+  agentRows = [],
+  onFocusAgent,
 }: RightPanelProps) {
-  const ctx = useMemo(() => ({ contextId }), [contextId]);
+  const ctx = useMemo(
+    () => ({ contextId, agentRows, onFocusAgent }),
+    [contextId, agentRows, onFocusAgent],
+  );
   const visibleModules = useMemo(() => listVisibleRightRailModules(undefined, ctx), [ctx]);
   const [activeId, setActiveId] = useState<RightRailModuleId>(readActiveModuleId);
 

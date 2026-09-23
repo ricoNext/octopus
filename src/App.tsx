@@ -61,6 +61,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { buildAgentRows } from "@/lib/agents/build-rows";
+import { subscribeAgentPresence } from "@/lib/agents/presence-store";
+import { findSessionLocation } from "@/lib/agents/resolve-session";
+import type { AgentPresence } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
 import { matchKeybinding } from "@/lib/keybindings";
 import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
@@ -251,6 +255,9 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
   const [selection, setSelection] = useState<Selection>(persistedState.selection ?? { kind: "empty" });
   const [visited, setVisited] = useState<string[]>([]);
+  const [presenceMap, setPresenceMap] = useState<ReadonlyMap<string, AgentPresence>>(
+    () => new Map(),
+  );
   const [tabActivationOrder, setTabActivationOrder] = useState<string[]>([]);
   const [tabsByContext, setTabsByContext] = useState<Record<string, TerminalTab[]>>(
     persistedState.tabsByContext ?? {},
@@ -1196,6 +1203,45 @@ export default function App() {
     ? selectedTabs.findIndex((tab) => tab.id === contextMenuTab.id)
     : -1;
 
+
+  useEffect(() => subscribeAgentPresence(setPresenceMap), []);
+
+  const agentRows = useMemo(
+    () => buildAgentRows(presenceMap, snapshot, tabsByContext),
+    [presenceMap, snapshot, tabsByContext],
+  );
+
+  const focusAgentSession = useCallback(
+    (sessionId: string) => {
+      const loc = findSessionLocation(tabsByContext, sessionId);
+      if (!loc) {
+        return;
+      }
+      const { contextId, tabId, leafId } = loc;
+      const asWorktree = worktrees.some((item) => item.id === contextId);
+      const asProject = projects.some((item) => item.id === contextId);
+      if (asWorktree) {
+        setSelection({ kind: "worktree", worktreeId: contextId });
+      } else if (asProject) {
+        setSelection({ kind: "main", projectId: contextId });
+      } else {
+        return;
+      }
+      setVisited((current) => [...current.filter((id) => id !== contextId), contextId]);
+      setActiveTabByContext((current) => ({ ...current, [contextId]: tabId }));
+      setTabsByContext((current) => {
+        const tabs = current[contextId] ?? [];
+        return {
+          ...current,
+          [contextId]: tabs.map((item) =>
+            item.id === tabId ? { ...item, activeLeafId: leafId } : item,
+          ),
+        };
+      });
+    },
+    [tabsByContext, worktrees, projects],
+  );
+
   function selectWorkspace(selection: Selection) {
     setView("workspace");
     setSelection(selection);
@@ -1651,6 +1697,8 @@ export default function App() {
                 onCollapse={() => setRightRailCollapsed(true)}
                 startWindowDrag={startWindowDrag}
                 contextId={selectedContextId}
+                agentRows={agentRows}
+                onFocusAgent={focusAgentSession}
               />
             </>
           )}
