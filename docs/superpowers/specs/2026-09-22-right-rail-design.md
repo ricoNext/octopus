@@ -33,7 +33,7 @@ Orca-style layers:
 - `ActivityBar` + `RightRailContent`
 - Module registry in `src/components/right-rail/registry.tsx`
 
-Built-in placeholders: `files`, `git`. Active module id persisted as `octopus.right-rail.active-module`.
+Built-in module: `agents` (files/git placeholders removed until implemented). Active module id persisted as `octopus.right-rail.active-module`.
 New features: append a `RightRailModule` to the registry.
 
 ## Activity Bar 位置（修订）

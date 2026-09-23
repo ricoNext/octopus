@@ -8,22 +8,15 @@ import {
 } from "./registry";
 
 describe("right-rail registry", () => {
-  it("exposes built-in modules with Agents first", () => {
-    expect(RIGHT_RAIL_MODULES.map((module) => module.id)).toEqual([
-      "agents",
-      "files",
-      "git",
-    ]);
+  it("exposes Agents as the only built-in module", () => {
+    expect(RIGHT_RAIL_MODULES.map((module) => module.id)).toEqual(["agents"]);
     expect(DEFAULT_RIGHT_RAIL_MODULE_ID).toBe("agents");
-    expect(getRightRailModule("git")?.title).toBe("Git");
     expect(getRightRailModule("agents")?.title).toBe("Agents");
+    expect(getRightRailModule("files")).toBeUndefined();
+    expect(getRightRailModule("git")).toBeUndefined();
   });
 
   it("lists visible modules", () => {
-    expect(listVisibleRightRailModules().map((module) => module.id)).toEqual([
-      "agents",
-      "files",
-      "git",
-    ]);
+    expect(listVisibleRightRailModules().map((module) => module.id)).toEqual(["agents"]);
   });
 });

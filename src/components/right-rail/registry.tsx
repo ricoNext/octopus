@@ -1,8 +1,6 @@
-import { BotIcon, FilesIcon, GitBranchIcon } from "lucide-react";
+import { BotIcon } from "lucide-react";
 
 import { AgentsModule } from "./modules/agents";
-import { FilesPlaceholderModule } from "./modules/files-placeholder";
-import { GitPlaceholderModule } from "./modules/git-placeholder";
 import type { RightRailModule, RightRailModuleId } from "./types";
 
 /** Built-in modules. Add new features by appending here (Orca-style registry). */
@@ -14,18 +12,6 @@ export const RIGHT_RAIL_MODULES: readonly RightRailModule[] = [
     render: (ctx) => (
       <AgentsModule rows={ctx.agentRows ?? []} onFocus={ctx.onFocusAgent} />
     ),
-  },
-  {
-    id: "files",
-    title: "文件",
-    icon: FilesIcon,
-    render: () => <FilesPlaceholderModule />,
-  },
-  {
-    id: "git",
-    title: "Git",
-    icon: GitBranchIcon,
-    render: () => <GitPlaceholderModule />,
   },
 ];
 
