@@ -16,6 +16,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+use crate::agent_detect::{detect_agent_for_session, presence_changed, AgentId};
+
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_HISTORY: usize = 200_000;
 
@@ -274,6 +276,32 @@ impl DaemonClient {
                                     );
                                 } else if event == "ptyExit" {
                                     let _ = app.emit("pty-exit", PtyExitEvent { id: session_id });
+                                } else if event == "agentPresence" {
+                                    let bytes = data.unwrap_or_default();
+                                    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                                        let context_id = value
+                                            .get("contextId")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let agent_id = value
+                                            .get("agentId")
+                                            .and_then(Value::as_str)
+                                            .map(ToOwned::to_owned);
+                                        let process_name = value
+                                            .get("processName")
+                                            .and_then(Value::as_str)
+                                            .map(ToOwned::to_owned);
+                                        let _ = app.emit(
+                                            "agent-presence",
+                                            AgentPresenceEvent {
+                                                session_id,
+                                                context_id,
+                                                agent_id,
+                                                process_name,
+                                            },
+                                        );
+                                    }
                                 }
                             }
                             WireMessage::Request { .. } => {}
@@ -395,6 +423,15 @@ struct PtyExitEvent {
     id: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentPresenceEvent {
+    session_id: String,
+    context_id: String,
+    agent_id: Option<String>,
+    process_name: Option<String>,
+}
+
 fn connect_and_auth(socket_path: &Path, token: &str) -> Result<UnixStream, String> {
     let mut stream = UnixStream::connect(socket_path).map_err(|err| err.to_string())?;
     let request = WireMessage::Request {
@@ -443,6 +480,9 @@ struct DaemonSession {
 struct DaemonState {
     sessions: Mutex<HashMap<String, Arc<DaemonSession>>>,
     next_connection: AtomicU64,
+    /// Authenticated client writers — presence broadcasts here (not only session attachees).
+    clients: Mutex<HashMap<u64, mpsc::Sender<WireMessage>>>,
+    last_presence: Mutex<HashMap<String, Option<AgentId>>>,
 }
 
 pub fn run_terminal_daemon() {
@@ -459,7 +499,10 @@ pub fn run_terminal_daemon() {
     let state = Arc::new(DaemonState {
         sessions: Mutex::new(HashMap::new()),
         next_connection: AtomicU64::new(1),
+        clients: Mutex::new(HashMap::new()),
+        last_presence: Mutex::new(HashMap::new()),
     });
+    start_agent_presence_poller(state.clone());
     for stream in listener.incoming().flatten() {
         let state = state.clone();
         let token = token.clone();
@@ -496,6 +539,9 @@ fn handle_client(stream: UnixStream, token: &str, state: Arc<DaemonState>) {
     };
     if !authenticated {
         return;
+    }
+    if let Ok(mut clients) = state.clients.lock() {
+        clients.insert(connection_id, outgoing.clone());
     }
     while let Some(message) = read_request(&mut reader, &mut line) {
         let WireMessage::Request { id, command, payload, .. } = message else { continue };
@@ -611,6 +657,7 @@ fn handle_request(
             let session = state.sessions.lock().ok().and_then(|mut sessions| sessions.remove(&session_id));
             if let Some(session) = session {
                 terminate(session.pid);
+                clear_session_presence(state, &session_id, &session.context_id);
             }
             Ok(Value::Null)
         }
@@ -725,6 +772,9 @@ fn clone_event(event: &WireMessage) -> WireMessage {
 }
 
 fn detach_connection(connection_id: u64, state: &Arc<DaemonState>) {
+    if let Ok(mut clients) = state.clients.lock() {
+        clients.remove(&connection_id);
+    }
     if let Ok(sessions) = state.sessions.lock() {
         for session in sessions.values() {
             if let Ok(mut subscribers) = session.subscribers.lock() {
@@ -740,6 +790,124 @@ fn string_field(payload: &Value, field: &str) -> Result<String, String> {
 
 fn number_field(payload: &Value, field: &str) -> u16 {
     payload.get(field).and_then(Value::as_u64).unwrap_or(1).clamp(1, u16::MAX as u64) as u16
+}
+
+
+fn capture_ps_table() -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=", "ppid=", "comm="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn broadcast_agent_presence(
+    state: &DaemonState,
+    session_id: &str,
+    context_id: &str,
+    agent_id: Option<AgentId>,
+    process_name: Option<String>,
+) {
+    let payload = json!({
+        "contextId": context_id,
+        "agentId": agent_id.map(|id| id.as_str()),
+        "processName": process_name,
+    });
+    let Ok(bytes) = serde_json::to_vec(&payload) else {
+        return;
+    };
+    let event = WireMessage::Event {
+        version: PROTOCOL_VERSION,
+        event: "agentPresence".into(),
+        session_id: session_id.to_string(),
+        data: Some(bytes),
+    };
+    if let Ok(clients) = state.clients.lock() {
+        for sender in clients.values() {
+            let _ = sender.send(clone_event(&event));
+        }
+    }
+}
+
+fn clear_session_presence(state: &DaemonState, session_id: &str, context_id: &str) {
+    let should_emit = {
+        let Ok(mut last) = state.last_presence.lock() else {
+            return;
+        };
+        let prev = last.remove(session_id).unwrap_or(None);
+        presence_changed(&prev, &None)
+    };
+    if should_emit {
+        broadcast_agent_presence(state, session_id, context_id, None, None);
+    }
+}
+
+fn start_agent_presence_poller(state: Arc<DaemonState>) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(300));
+        let Some(ps_text) = capture_ps_table() else {
+            continue;
+        };
+        let snapshot: Vec<(String, String, Option<u32>, bool)> = {
+            let Ok(sessions) = state.sessions.lock() else {
+                continue;
+            };
+            sessions
+                .iter()
+                .map(|(id, session)| {
+                    (
+                        id.clone(),
+                        session.context_id.clone(),
+                        session.pid,
+                        session.alive.load(Ordering::Acquire),
+                    )
+                })
+                .collect()
+        };
+        let live_ids: std::collections::HashSet<String> =
+            snapshot.iter().map(|(id, _, _, _)| id.clone()).collect();
+
+        for (session_id, context_id, pid, alive) in snapshot {
+            let detected = if alive {
+                pid.and_then(|root| detect_agent_for_session(root, &ps_text))
+            } else {
+                None
+            };
+            let next_id = detected.as_ref().map(|(id, _)| *id);
+            let process_name = detected.map(|(_, name)| name);
+            let should_emit = {
+                let Ok(mut last) = state.last_presence.lock() else {
+                    continue;
+                };
+                let prev = last.get(&session_id).cloned().unwrap_or(None);
+                if !presence_changed(&prev, &next_id) {
+                    false
+                } else {
+                    last.insert(session_id.clone(), next_id);
+                    true
+                }
+            };
+            if should_emit {
+                broadcast_agent_presence(&state, &session_id, &context_id, next_id, process_name);
+            }
+        }
+
+        let stale: Vec<String> = {
+            let Ok(last) = state.last_presence.lock() else {
+                continue;
+            };
+            last.keys()
+                .filter(|id| !live_ids.contains(*id))
+                .cloned()
+                .collect()
+        };
+        for session_id in stale {
+            clear_session_presence(&state, &session_id, "");
+        }
+    });
 }
 
 fn terminate(pid: Option<u32>) {

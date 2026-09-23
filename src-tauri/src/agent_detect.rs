@@ -1,5 +1,3 @@
-#![allow(dead_code)] // wired in Task 2 daemon poll
-
 //! Pure process-name matching for Phase 1 Agents presence (no IO).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
