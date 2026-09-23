@@ -1,3 +1,4 @@
+mod agent_detect;
 mod commands;
 mod git;
 mod models;
