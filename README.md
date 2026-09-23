@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/macOS-4493F8?style=flat-square" alt="Supported platform: macOS" />
 </p>
 
-octopus 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复的内嵌终端。
+octopus 是面向 macOS 的 Git Worktree 编排桌面应用。它把本地 Git 仓库、主工作区和多个真实 `git worktree` 集中到一个窗口里管理，每个工作区都有可恢复、可分屏的内嵌终端，右侧面板还能实时查看各终端里运行中的 AI Agent。
 
 ![](https://neptune-ipc.oss-cn-shenzhen.aliyuncs.com/img/20260921135740826.png)
 
@@ -46,6 +46,8 @@ sudo xattr -dr com.apple.quarantine /Applications/octopus.app
 侧栏「项目」旁点加号，用系统目录选择器选一个本地 Git 仓库。添加时会检查 Git、识别仓库根目录和默认分支。
 
 如果仓库已经有通过 `git worktree` 创建的关联工作树，应用会列出它们。勾选需要在侧栏管理的条目后再添加项目；不勾选也可以只登记主工作区。导入只写入 octopus 的本机记录，不会移动、修改或重新创建已有工作树。
+
+后续你在仓库里直接用 `git worktree` 新增或删除了工作树时，可以在项目菜单中点「刷新列表」重新对账：应用会移除磁盘上已消失的工作树记录，并导入新出现的关联工作树。
 
 ### 浏览与切换分支
 
@@ -96,9 +98,20 @@ git worktree add -b <分支名> <工作树路径> <起始分支>
 
 - 顶部可以新建、切换、关闭终端标签
 - 每个项目或工作树至少保留一个标签
+- `⌘D` 向右分屏、`⇧⌘D` 向下分屏；拖动分隔条可调整比例，分屏标题栏上有单独的关闭按钮
 - 右键标签可以重命名，或关闭当前、其他、左侧、右侧标签
-- 标签名、当前选择和活动标签会保存在本机；重启后会尝试恢复仍存在的会话
+- 标签名、分屏布局、当前选择和活动标签会保存在本机；重启后会尝试恢复仍存在的会话
 - 终端进程退出后可以重新打开
+
+终端按 Unicode 11 计算字符宽度，中文、emoji 和制表符的显示与原生终端一致；PTY 默认开启 truecolor，明暗主题跟随应用设置。
+
+### 右侧面板与 Agents
+
+窗口右侧有一个可折叠、可拖拽调宽的面板，顶部活动栏负责切换面板模块。
+
+- **Agents**：实时列出各内嵌终端会话中运行中的 AI Agent（目前支持识别 Codex 和 CodeBuddy 进程），显示所属项目、分支和所在终端标签
+- 点击某个 Agent 条目，会自动切换到它所在的终端标签
+- Agent 退出后条目自动消失；应用重启后会重新连接守护进程，仍在运行的 Agent 会继续显示
 
 ### 打开外部工具
 
@@ -124,6 +137,7 @@ git worktree add -b <分支名> <工作树路径> <起始分支>
 ## 数据与状态
 
 - 项目和工作树元数据保存在应用数据目录的 `state.json` 中，一般位于 `~/Library/Application Support/dev.octopus.app/`
+- 终端会话由常驻的终端守护进程管理；应用重启后会重新连接守护进程并恢复会话与 Agent 状态
 - 启动时会重新读取 `git worktree list --porcelain`，把创建状态和磁盘实际状态对账
 - 仓库或工作树目录被外部删除后，界面会标记为「路径丢失」，不会自动删除记录
 - 删除工作树或项目时，会结束对应的终端会话
@@ -134,7 +148,7 @@ octopus 是本机单用户工具，目前不包含：
 
 - Windows、Linux、远程主机或 SSH 工作树
 - 内嵌编辑器、文件树、LSP、调试器或浏览器
-- 内置 Agent 启动器、Agent 状态识别和模型网关
+- 内置 Agent 启动器或模型网关（目前仅识别内嵌终端中的 Codex / CodeBuddy 进程）
 - GitHub / GitLab、PR、Issue、CI 或账号系统
 - 内嵌 diff 审查面板（当前主区域为终端工作区）
 - 自动 fetch、依赖安装、环境初始化或共享 `node_modules`
