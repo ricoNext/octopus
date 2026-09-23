@@ -41,6 +41,15 @@ struct SessionInfo {
     alive: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPresenceItem {
+    pub session_id: String,
+    pub context_id: String,
+    pub agent_id: String,
+    pub process_name: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum WireMessage {
@@ -142,6 +151,11 @@ impl PtyManager {
         if let Ok(mut contexts) = self.contexts.lock() {
             contexts.remove(id);
         }
+    }
+
+    pub fn list_agent_presence(&self) -> Result<Vec<AgentPresenceItem>, String> {
+        let value = self.client.request("listAgentPresence", json!({}))?;
+        serde_json::from_value(value).map_err(|err| format!("终端 daemon 返回格式错误：{err}"))
     }
 
     pub fn kill_context(&self, context_id: &str) {
@@ -932,68 +946,72 @@ fn clear_session_presence(state: &DaemonState, session_id: &str, context_id: &st
     }
 }
 
+fn refresh_agent_presence(state: &DaemonState) {
+    let Some(ps_text) = capture_ps_table() else {
+        return;
+    };
+    let snapshot: Vec<(String, String, Option<u32>, bool)> = {
+        let Ok(sessions) = state.sessions.lock() else {
+            return;
+        };
+        sessions
+            .iter()
+            .map(|(id, session)| {
+                (
+                    id.clone(),
+                    session.context_id.clone(),
+                    session.pid,
+                    session.alive.load(Ordering::Acquire),
+                )
+            })
+            .collect()
+    };
+    let live_ids: std::collections::HashSet<String> =
+        snapshot.iter().map(|(id, _, _, _)| id.clone()).collect();
+
+    for (session_id, context_id, pid, alive) in snapshot {
+        let detected = if alive {
+            pid.and_then(|root| detect_agent_for_session(root, &ps_text))
+        } else {
+            None
+        };
+        let next_id = detected.as_ref().map(|(id, _)| *id);
+        let process_name = detected.map(|(_, name)| name);
+        let should_emit = {
+            let Ok(mut last) = state.last_presence.lock() else {
+                continue;
+            };
+            let prev = last.get(&session_id).cloned().unwrap_or(None);
+            if !presence_changed(&prev, &next_id) {
+                false
+            } else {
+                last.insert(session_id.clone(), next_id);
+                true
+            }
+        };
+        if should_emit {
+            broadcast_agent_presence(state, &session_id, &context_id, next_id, process_name);
+        }
+    }
+
+    let stale: Vec<String> = {
+        let Ok(last) = state.last_presence.lock() else {
+            return;
+        };
+        last.keys()
+            .filter(|id| !live_ids.contains(*id))
+            .cloned()
+            .collect()
+    };
+    for session_id in stale {
+        clear_session_presence(state, &session_id, "");
+    }
+}
+
 fn start_agent_presence_poller(state: Arc<DaemonState>) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(300));
-        let Some(ps_text) = capture_ps_table() else {
-            continue;
-        };
-        let snapshot: Vec<(String, String, Option<u32>, bool)> = {
-            let Ok(sessions) = state.sessions.lock() else {
-                continue;
-            };
-            sessions
-                .iter()
-                .map(|(id, session)| {
-                    (
-                        id.clone(),
-                        session.context_id.clone(),
-                        session.pid,
-                        session.alive.load(Ordering::Acquire),
-                    )
-                })
-                .collect()
-        };
-        let live_ids: std::collections::HashSet<String> =
-            snapshot.iter().map(|(id, _, _, _)| id.clone()).collect();
-
-        for (session_id, context_id, pid, alive) in snapshot {
-            let detected = if alive {
-                pid.and_then(|root| detect_agent_for_session(root, &ps_text))
-            } else {
-                None
-            };
-            let next_id = detected.as_ref().map(|(id, _)| *id);
-            let process_name = detected.map(|(_, name)| name);
-            let should_emit = {
-                let Ok(mut last) = state.last_presence.lock() else {
-                    continue;
-                };
-                let prev = last.get(&session_id).cloned().unwrap_or(None);
-                if !presence_changed(&prev, &next_id) {
-                    false
-                } else {
-                    last.insert(session_id.clone(), next_id);
-                    true
-                }
-            };
-            if should_emit {
-                broadcast_agent_presence(&state, &session_id, &context_id, next_id, process_name);
-            }
-        }
-
-        let stale: Vec<String> = {
-            let Ok(last) = state.last_presence.lock() else {
-                continue;
-            };
-            last.keys()
-                .filter(|id| !live_ids.contains(*id))
-                .cloned()
-                .collect()
-        };
-        for session_id in stale {
-            clear_session_presence(&state, &session_id, "");
-        }
+        refresh_agent_presence(&state);
     });
 }
 

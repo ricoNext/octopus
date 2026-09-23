@@ -324,6 +324,13 @@ pub fn pty_kill(state: State<AppState>, session_id: String) {
     state.ptys.kill(&session_id);
 }
 
+#[tauri::command]
+pub fn list_agent_presence(
+    state: State<AppState>,
+) -> Result<Vec<crate::pty::AgentPresenceItem>, String> {
+    state.ptys.list_agent_presence()
+}
+
 pub fn init_state(app: &AppHandle) -> Result<(), String> {
     let dir = app
         .path()

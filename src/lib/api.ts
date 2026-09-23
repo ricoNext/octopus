@@ -83,4 +83,14 @@ export const api = {
   ptyResize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("pty_resize", { sessionId, cols, rows }),
   ptyKill: (sessionId: string) => invoke<void>("pty_kill", { sessionId }),
+  listAgentPresence: () =>
+    invoke<
+      Array<{
+        sessionId: string;
+        contextId: string;
+        agentId: string;
+        processName?: string | null;
+      }>
+    >("list_agent_presence"),
 };
+
