@@ -93,6 +93,7 @@ pub fn run() {
             commands::abandon_worktree,
             commands::delete_worktree,
             commands::remove_missing_worktree,
+            commands::refresh_project_worktrees,
             commands::remove_project,
             commands::list_local_branches,
             commands::list_branch_options,

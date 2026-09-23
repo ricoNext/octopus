@@ -351,6 +351,91 @@ pub fn remove_missing_worktree(store: &mut Store, worktree_id: &str) -> Result<(
     Ok(())
 }
 
+
+pub struct RefreshProjectWorktreesOutcome {
+    pub removed: Vec<String>,
+    pub imported: Vec<String>,
+    pub removed_ids: Vec<String>,
+}
+
+pub fn refresh_project_worktrees(
+    store: &mut Store,
+    project_id: &str,
+) -> Result<RefreshProjectWorktreesOutcome, String> {
+    let project = store
+        .projects
+        .iter()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "找不到该项目".to_string())?
+        .clone();
+    let root = PathBuf::from(&project.root_path);
+    if !root.exists() {
+        return Err("项目根目录不存在或已不可用".into());
+    }
+    // Ensure the root is a usable git repo by listing worktrees.
+    let listed = worktree_list(&root).map_err(|err| {
+        if err.is_empty() {
+            "项目根目录不是可用的 git 仓库".to_string()
+        } else {
+            err
+        }
+    })?;
+
+    let mut removed = Vec::new();
+    let mut removed_ids = Vec::new();
+    store.worktrees.retain(|worktree| {
+        if worktree.project_id != project_id {
+            return true;
+        }
+        let on_disk = listed
+            .iter()
+            .any(|item| same_path(&item.path, Path::new(&worktree.path)));
+        if on_disk {
+            true
+        } else {
+            removed.push(worktree.display_name.clone());
+            removed_ids.push(worktree.id.clone());
+            false
+        }
+    });
+
+    let linked = existing_linked_worktrees(&root, &root)?;
+    let mut imported = Vec::new();
+    for item in linked {
+        let canon = canonicalize_or(Path::new(&item.path));
+        let already = store.worktrees.iter().any(|worktree| {
+            worktree.project_id == project_id && same_path(Path::new(&worktree.path), &canon)
+        });
+        if already {
+            continue;
+        }
+        let branch_name = item
+            .branch_name
+            .clone()
+            .unwrap_or_else(|| item.head.chars().take(8).collect());
+        let display_name = crate::git::display_name_from_path(&canon);
+        imported.push(display_name.clone());
+        store.worktrees.push(Worktree {
+            id: Uuid::new_v4().to_string(),
+            project_id: project_id.to_string(),
+            display_name,
+            branch_name,
+            start_from: None,
+            path: canon.to_string_lossy().to_string(),
+            origin: WorktreeOrigin::Imported,
+            status: WorktreeStatus::Ready,
+            error_message: None,
+        });
+    }
+
+    Ok(RefreshProjectWorktreesOutcome {
+        removed,
+        imported,
+        removed_ids,
+    })
+}
+
+
 pub fn remove_project(
     store: &mut Store,
     project_id: &str,
@@ -669,5 +754,89 @@ mod tests {
         let cwd = session_cwd(&store, &project_id).unwrap();
         assert_eq!(Path::new(cwd), repo.canonicalize().unwrap());
         assert!(session_cwd(&store, "missing").is_err());
+    }
+
+    #[test]
+    fn refresh_project_worktrees_removes_missing_and_imports_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("acme");
+        init_repo(&repo);
+
+        // Linked worktree that will be imported at add time, then later removed from git.
+        let old_extra = tmp.path().join("acme-worktrees").join("old-one");
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    repo.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "-b",
+                    "old-one",
+                    old_extra.to_str().unwrap(),
+                    "main",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let mut store = Store::default();
+        add_project(
+            &mut store,
+            repo.to_str().unwrap(),
+            vec![old_extra.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        let project_id = store.projects[0].id.clone();
+        assert_eq!(store.worktrees.len(), 1);
+        assert_eq!(store.worktrees[0].display_name, "old-one");
+        let old_id = store.worktrees[0].id.clone();
+
+        // Simulate missing: remove from git worktree list and delete the directory.
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    repo.to_str().unwrap(),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    old_extra.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _ = fs::remove_dir_all(&old_extra);
+
+        // New linked worktree on disk that is not registered yet.
+        let new_extra = tmp.path().join("acme-worktrees").join("new-one");
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    repo.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "-b",
+                    "new-one",
+                    new_extra.to_str().unwrap(),
+                    "main",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let outcome = refresh_project_worktrees(&mut store, &project_id).unwrap();
+        assert_eq!(outcome.removed, vec!["old-one".to_string()]);
+        assert_eq!(outcome.removed_ids, vec![old_id]);
+        assert_eq!(outcome.imported, vec!["new-one".to_string()]);
+        assert_eq!(store.worktrees.len(), 1);
+        assert_eq!(store.worktrees[0].display_name, "new-one");
+        assert_eq!(store.worktrees[0].origin, WorktreeOrigin::Imported);
+        assert_eq!(store.worktrees[0].status, WorktreeStatus::Ready);
+        assert!(store.worktrees[0].path.contains("new-one"));
     }
 }

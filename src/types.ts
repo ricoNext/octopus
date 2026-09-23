@@ -62,6 +62,12 @@ export type RemoveProjectResult =
   | { status: "ok"; snapshot: AppSnapshot }
   | { status: "hasAppWorktrees"; count: number };
 
+export type RefreshProjectWorktreesResult = {
+  snapshot: AppSnapshot;
+  removed: string[];
+  imported: string[];
+};
+
 export type Selection =
   | { kind: "empty" }
   | { kind: "main"; projectId: string }

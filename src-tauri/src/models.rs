@@ -104,3 +104,12 @@ pub enum RemoveProjectResult {
     Ok { snapshot: AppSnapshot },
     HasAppWorktrees { count: usize },
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshProjectWorktreesResult {
+    pub snapshot: AppSnapshot,
+    pub removed: Vec<String>,
+    pub imported: Vec<String>,
+}
+

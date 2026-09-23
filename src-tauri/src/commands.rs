@@ -6,7 +6,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::models::{
-    AppSnapshot, DeleteResult, InspectResult, RemoveProjectResult, Store,
+    AppSnapshot, DeleteResult, InspectResult, RefreshProjectWorktreesResult,
+    RemoveProjectResult, Store,
 };
 use crate::pty::PtyManager;
 use crate::workspace::{self, CreateOutcome};
@@ -190,6 +191,25 @@ pub fn remove_missing_worktree(
     workspace::remove_missing_worktree(&mut store, &worktree_id)?;
     persist(&state, &store)?;
     Ok(store.snapshot())
+}
+
+#[tauri::command]
+pub fn refresh_project_worktrees(
+    state: State<AppState>,
+    project_id: String,
+) -> Result<RefreshProjectWorktreesResult, String> {
+    let mut store = locked_store(&state)?;
+    let outcome = workspace::refresh_project_worktrees(&mut store, &project_id)?;
+    for id in &outcome.removed_ids {
+        state.ptys.kill_context(id);
+    }
+    store.reconcile();
+    persist(&state, &store)?;
+    Ok(RefreshProjectWorktreesResult {
+        snapshot: store.snapshot(),
+        removed: outcome.removed,
+        imported: outcome.imported,
+    })
 }
 
 #[tauri::command]

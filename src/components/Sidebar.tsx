@@ -8,6 +8,7 @@ import {
   PlusIcon,
   SettingsIcon,
   SquareTerminalIcon,
+  RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -75,6 +76,7 @@ type SidebarProps = {
   onAddProject: () => void;
   onNewWorktree: (projectId: string, startFrom?: string) => void;
   onRemoveProject: (projectId: string) => void;
+  onRefreshProjectWorktrees: (projectId: string) => void;
   onDeleteWorktree: (worktreeId: string) => void;
   onRetryWorktree: (worktreeId: string) => void;
   onAbandonWorktree: (worktreeId: string) => void;
@@ -101,6 +103,7 @@ type ProjectMenuItemsProps = {
   editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
   onRemoveProject: (projectId: string) => void;
+  onRefreshProjectWorktrees: (projectId: string) => void;
 };
 
 function ProjectMenuItems({
@@ -109,6 +112,7 @@ function ProjectMenuItems({
   editorConfigured,
   onRevealFinder,
   onRemoveProject,
+  onRefreshProjectWorktrees,
 }: ProjectMenuItemsProps) {
   return (
     <>
@@ -123,6 +127,13 @@ function ProjectMenuItems({
         disabled={project.pathMissing}
       >
         在访达中显示
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => onRefreshProjectWorktrees(project.id)}
+        disabled={project.pathMissing}
+      >
+        <RefreshCwIcon />
+        刷新列表
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -236,6 +247,7 @@ export function Sidebar({
   onAddProject,
   onNewWorktree,
   onRemoveProject,
+  onRefreshProjectWorktrees,
   onDeleteWorktree,
   onRetryWorktree,
   onAbandonWorktree,
@@ -461,6 +473,7 @@ export function Sidebar({
                             editorConfigured={editorConfigured}
                             onRevealFinder={onRevealFinder}
                             onRemoveProject={onRemoveProject}
+                            onRefreshProjectWorktrees={onRefreshProjectWorktrees}
                           />
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -692,6 +705,7 @@ export function Sidebar({
                   editorConfigured={editorConfigured}
                   onRevealFinder={onRevealFinder}
                   onRemoveProject={onRemoveProject}
+                  onRefreshProjectWorktrees={onRefreshProjectWorktrees}
                 />
               ) : contextMain ? (
                 <MainWorkspaceMenuItems

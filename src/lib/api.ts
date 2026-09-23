@@ -6,6 +6,7 @@ import type {
   DeleteResult,
   InspectResult,
   MutationResult,
+  RefreshProjectWorktreesResult,
   RemoveProjectResult,
 } from "@/types";
 
@@ -59,6 +60,10 @@ export const api = {
     invoke<DeleteResult>("delete_worktree", { worktreeId, deleteBranch, force }),
   removeMissingWorktree: (worktreeId: string) =>
     invoke<AppSnapshot>("remove_missing_worktree", { worktreeId }),
+  refreshProjectWorktrees: (projectId: string) =>
+    invoke<RefreshProjectWorktreesResult>("refresh_project_worktrees", {
+      projectId,
+    }),
   removeProject: (projectId: string, forget: boolean) =>
     invoke<RemoveProjectResult>("remove_project", { projectId, forget }),
   listLocalBranches: (projectId: string) =>
