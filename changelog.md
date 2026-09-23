@@ -2,6 +2,24 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.18] - 2026-09-23
+
+### 变更
+- chore(release): v0.1.17 (7984f0b)
+- Update README.md (85333f2)
+- docs: 同步分屏、Agents 面板与刷新工作树到 README (227e1f8)
+- chore: 忽略 .superpowers 工作目录 (ac2b18b)
+- fix(agents): keep presence across app relaunch (986f23c)
+- fix(agents): hydrate presence list on app relaunch (429d8cf)
+- chore(right-rail): remove unused files and git placeholders (c4963a4)
+- fix(agents): use single BSD ps -o format string on macOS (74c3a72)
+- fix(agents): replace stale terminal daemon lacking presence protocol (ac921c9)
+- feat(agents): FE presence store, Agents rail module, click-to-focus (1125433)
+- feat(agents): daemon presence poll and agent-presence bridge (a13485f)
+- feat(agents): rust whitelist match and process-tree helpers (3870da8)
+- docs: Agents right-rail Phase 1 implementation plan (008400c)
+- docs: Agents right-rail Phase 1 design (daemon process poll) (9893ee9)
+
 ## [0.1.17] - 2026-09-23
 
 ### 变更

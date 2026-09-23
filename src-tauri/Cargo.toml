@@ -1,6 +1,6 @@
 [package]
 name = "octopus"
-version = "0.1.17"
+version = "0.1.18"
 description = "macOS 工作树编排台"
 authors = ["Star Lee"]
 edition = "2021"
