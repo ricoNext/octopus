@@ -837,14 +837,20 @@ fn number_field(payload: &Value, field: &str) -> u16 {
 
 
 fn capture_ps_table() -> Option<String> {
+    // macOS/BSD ps requires a single -o format string: "pid=,ppid=,comm=".
+    // Splitting into separate argv tokens ("pid=" "ppid=" "comm=") is illegal and yields empty output.
     let output = Command::new("ps")
-        .args(["-axo", "pid=", "ppid=", "comm="])
+        .args(["-axo", "pid=,ppid=,comm="])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if stdout.trim().is_empty() {
+        return None;
+    }
+    Some(stdout)
 }
 
 fn replay_agent_presence(state: &DaemonState, outgoing: &mpsc::Sender<WireMessage>) {
