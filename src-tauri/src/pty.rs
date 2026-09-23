@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -154,8 +154,11 @@ impl PtyManager {
     }
 
     pub fn list_agent_presence(&self) -> Result<Vec<AgentPresenceItem>, String> {
-        let value = self.client.request("listAgentPresence", json!({}))?;
-        serde_json::from_value(value).map_err(|err| format!("终端 daemon 返回格式错误：{err}"))
+        match self.client.request("listAgentPresence", json!({})) {
+            Ok(value) => serde_json::from_value(value)
+                .map_err(|err| format!("终端 daemon 返回格式错误：{err}")),
+            Err(_) => Ok(self.client.cached_presence()),
+        }
     }
 
     pub fn kill_context(&self, context_id: &str) {
@@ -190,6 +193,8 @@ struct DaemonClient {
     stream: Mutex<UnixStream>,
     pending: Arc<Mutex<HashMap<String, Arc<(Mutex<Option<Result<Value, String>>>, Condvar)>>>>,
     next_id: AtomicU64,
+    /// Last agentPresence per session, including connect-time replay (before FE listens).
+    presence: Arc<Mutex<HashMap<String, AgentPresenceItem>>>,
 }
 
 impl DaemonClient {
@@ -221,6 +226,7 @@ impl DaemonClient {
             stream: Mutex::new(stream),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            presence: Arc::new(Mutex::new(HashMap::new())),
         };
         client.start_reader(app.clone())?;
         Ok(client)
@@ -234,6 +240,7 @@ impl DaemonClient {
             .try_clone()
             .map_err(|err| format!("无法读取终端 daemon：{err}"))?;
         let pending = self.pending.clone();
+        let presence = self.presence.clone();
         thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
@@ -289,6 +296,24 @@ impl DaemonClient {
                                             .get("processName")
                                             .and_then(Value::as_str)
                                             .map(ToOwned::to_owned);
+                                        if let Ok(mut cache) = presence.lock() {
+                                            match &agent_id {
+                                                Some(id) if !id.is_empty() => {
+                                                    cache.insert(
+                                                        session_id.clone(),
+                                                        AgentPresenceItem {
+                                                            session_id: session_id.clone(),
+                                                            context_id: context_id.clone(),
+                                                            agent_id: id.clone(),
+                                                            process_name: process_name.clone(),
+                                                        },
+                                                    );
+                                                }
+                                                _ => {
+                                                    cache.remove(&session_id);
+                                                }
+                                            }
+                                        }
                                         let _ = app.emit(
                                             "agent-presence",
                                             AgentPresenceEvent {
@@ -349,7 +374,14 @@ impl DaemonClient {
     }
 
     /// Send a daemon command without waiting for its response (Orca-style keystroke path).
-    fn notify(&self, command: &str, payload: Value) -> Result<(), String> {
+    fn cached_presence(&self) -> Vec<AgentPresenceItem> {
+        self.presence
+            .lock()
+            .map(|cache| cache.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+        fn notify(&self, command: &str, payload: Value) -> Result<(), String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let message = WireMessage::Request {
             version: PROTOCOL_VERSION,
@@ -429,6 +461,23 @@ struct AgentPresenceEvent {
     process_name: Option<String>,
 }
 
+fn read_socket_line(stream: &mut UnixStream) -> Result<String, String> {
+    // Byte-at-a-time so we never pull the next daemon message (e.g. agentPresence replay)
+    // into a BufReader that would then be dropped and lose those bytes.
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        stream
+            .read_exact(&mut byte)
+            .map_err(|err| format!("无法读取终端 daemon：{err}"))?;
+        if byte[0] == b'\n' {
+            break;
+        }
+        line.push(byte[0]);
+    }
+    String::from_utf8(line).map_err(|err| format!("终端 daemon 响应不是 UTF-8：{err}"))
+}
+
 fn connect_and_auth(socket_path: &Path, token: &str) -> Result<(UnixStream, u8), String> {
     let mut stream = UnixStream::connect(socket_path).map_err(|err| err.to_string())?;
     let request = WireMessage::Request {
@@ -442,9 +491,7 @@ fn connect_and_auth(socket_path: &Path, token: &str) -> Result<(UnixStream, u8),
     stream.write_all(&data).map_err(|err| err.to_string())?;
     stream.write_all(b"\n").map_err(|err| err.to_string())?;
     stream.flush().map_err(|err| err.to_string())?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(|err| err.to_string())?);
-    let mut line = String::new();
-    reader.read_line(&mut line).map_err(|err| err.to_string())?;
+    let line = read_socket_line(&mut stream)?;
     let WireMessage::Response {
         ok: true,
         result,
@@ -726,6 +773,35 @@ fn handle_request(
                 alive: session.alive.load(Ordering::Acquire),
             }).collect::<Vec<_>>();
             serde_json::to_value(items).map_err(|err| format!("无法编码终端列表：{err}"))
+        }
+        "listAgentPresence" => {
+            refresh_agent_presence(state);
+            let items = {
+                let last = state
+                    .last_presence
+                    .lock()
+                    .map_err(|_| "终端状态锁损坏".to_string())?;
+                let sessions = state
+                    .sessions
+                    .lock()
+                    .map_err(|_| "终端状态锁损坏".to_string())?;
+                last.iter()
+                    .filter_map(|(session_id, agent_id)| {
+                        let agent_id = (*agent_id)?;
+                        let context_id = sessions
+                            .get(session_id)
+                            .map(|session| session.context_id.clone())
+                            .unwrap_or_default();
+                        Some(AgentPresenceItem {
+                            session_id: session_id.clone(),
+                            context_id,
+                            agent_id: agent_id.as_str().to_string(),
+                            process_name: None,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            serde_json::to_value(items).map_err(|err| format!("无法编码 Agents 列表：{err}"))
         }
         _ => Err(format!("未知终端命令：{command}")),
     }

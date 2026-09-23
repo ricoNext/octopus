@@ -90,11 +90,23 @@ async function hydrateFromDaemon() {
     return hydratePromise;
   }
   hydratePromise = (async () => {
+    // Replay may still be landing in the app-side cache right after connect.
+    const delaysMs = [0, 100, 300, 600];
     try {
-      const items = await api.listAgentPresence();
-      replaceFromSnapshot(items);
-    } catch {
-      // Daemon may not be ready yet; live events can still fill the map.
+      for (const delay of delaysMs) {
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+        try {
+          const items = await api.listAgentPresence();
+          replaceFromSnapshot(items);
+          if (items.length > 0 || delay === delaysMs[delaysMs.length - 1]) {
+            return;
+          }
+        } catch {
+          // Daemon may not be ready yet; retry, then rely on live events.
+        }
+      }
     } finally {
       hydratePromise = null;
     }
