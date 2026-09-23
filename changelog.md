@@ -2,6 +2,13 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.16] - 2026-09-23
+
+### 变更
+- feat(worktrees): 新增刷新项目工作树功能 (20ee570)
+- feat(terminal): phase 0–1 warm retain caps and metrics (871c6a6)
+- docs: add terminal parking / warm-retain design (Orca-lite) (73b19d3)
+
 ## [0.1.15] - 2026-09-22
 
 ### 变更
