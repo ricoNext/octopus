@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::agent_detect::{detect_agent_for_session, presence_changed, AgentId};
 
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = 2;
 const MAX_HISTORY: usize = 200_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,39 +185,22 @@ impl DaemonClient {
         fs::create_dir_all(app_data_dir).map_err(|err| format!("无法创建终端 daemon 目录：{err}"))?;
         let mut token = fs::read_to_string(&token_path).unwrap_or_default();
         token.truncate(token.trim_end_matches(['\r', '\n']).len());
+        if token.is_empty() {
+            token = Uuid::new_v4().to_string();
+            write_token(&token_path, &token)?;
+        }
 
         let stream = match connect_and_auth(&socket_path, &token) {
-            Ok(stream) => stream,
+            Ok((stream, version)) if version >= PROTOCOL_VERSION => stream,
+            Ok(_) => {
+                // Stale daemon (e.g. installed .app) lacks Agents presence — replace it.
+                replace_stale_daemon(&socket_path);
+                spawn_terminal_daemon(&socket_path, &token)?;
+                wait_for_daemon(&socket_path, &token)?
+            }
             Err(_) => {
-                if token.is_empty() {
-                    token = Uuid::new_v4().to_string();
-                    write_token(&token_path, &token)?;
-                }
-                let executable = std::env::current_exe()
-                    .map_err(|err| format!("无法定位终端 daemon：{err}"))?;
-                Command::new(executable)
-                    .args([
-                        "--terminal-daemon",
-                        "--socket",
-                        socket_path.to_string_lossy().as_ref(),
-                        "--token",
-                        token.as_str(),
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .map_err(|err| format!("无法启动终端 daemon：{err}"))?;
-
-                let mut connected = None;
-                for _ in 0..60 {
-                    if let Ok(stream) = connect_and_auth(&socket_path, &token) {
-                        connected = Some(stream);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(50));
-                }
-                connected.ok_or_else(|| "终端 daemon 启动超时".to_string())?
+                spawn_terminal_daemon(&socket_path, &token)?;
+                wait_for_daemon(&socket_path, &token)?
             }
         };
         let client = Self {
@@ -432,7 +415,7 @@ struct AgentPresenceEvent {
     process_name: Option<String>,
 }
 
-fn connect_and_auth(socket_path: &Path, token: &str) -> Result<UnixStream, String> {
+fn connect_and_auth(socket_path: &Path, token: &str) -> Result<(UnixStream, u8), String> {
     let mut stream = UnixStream::connect(socket_path).map_err(|err| err.to_string())?;
     let request = WireMessage::Request {
         version: PROTOCOL_VERSION,
@@ -448,10 +431,69 @@ fn connect_and_auth(socket_path: &Path, token: &str) -> Result<UnixStream, Strin
     let mut reader = BufReader::new(stream.try_clone().map_err(|err| err.to_string())?);
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|err| err.to_string())?;
-    let WireMessage::Response { ok: true, .. } = serde_json::from_str(&line).map_err(|err| err.to_string())? else {
+    let WireMessage::Response {
+        ok: true,
+        result,
+        ..
+    } = serde_json::from_str(&line).map_err(|err| err.to_string())?
+    else {
         return Err("终端 daemon 身份校验失败".into());
     };
-    Ok(stream)
+    let version = result
+        .as_ref()
+        .and_then(|value| value.get("version"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as u8;
+    Ok((stream, version))
+}
+
+fn spawn_terminal_daemon(socket_path: &Path, token: &str) -> Result<(), String> {
+    let executable =
+        std::env::current_exe().map_err(|err| format!("无法定位终端 daemon：{err}"))?;
+    Command::new(executable)
+        .args([
+            "--terminal-daemon",
+            "--socket",
+            socket_path.to_string_lossy().as_ref(),
+            "--token",
+            token,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("无法启动终端 daemon：{err}"))?;
+    Ok(())
+}
+
+fn wait_for_daemon(socket_path: &Path, token: &str) -> Result<UnixStream, String> {
+    for _ in 0..80 {
+        if let Ok((stream, version)) = connect_and_auth(socket_path, token) {
+            if version >= PROTOCOL_VERSION {
+                return Ok(stream);
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err("终端 daemon 启动超时".into())
+}
+
+/// Kill whatever still owns the daemon socket (often an older installed .app build).
+fn replace_stale_daemon(socket_path: &Path) {
+    if let Ok(output) = Command::new("lsof")
+        .args(["-t", socket_path.to_string_lossy().as_ref()])
+        .output()
+    {
+        let pids = String::from_utf8_lossy(&output.stdout);
+        for pid in pids.split_whitespace() {
+            let _ = Command::new("kill").args(["-TERM", pid]).status();
+        }
+        thread::sleep(Duration::from_millis(150));
+        for pid in pids.split_whitespace() {
+            let _ = Command::new("kill").args(["-KILL", pid]).status();
+        }
+    }
+    let _ = fs::remove_file(socket_path);
 }
 
 fn write_token(path: &Path, token: &str) -> Result<(), String> {
@@ -543,6 +585,7 @@ fn handle_client(stream: UnixStream, token: &str, state: Arc<DaemonState>) {
     if let Ok(mut clients) = state.clients.lock() {
         clients.insert(connection_id, outgoing.clone());
     }
+    replay_agent_presence(&state, &outgoing);
     while let Some(message) = read_request(&mut reader, &mut line) {
         let WireMessage::Request { id, command, payload, .. } = message else { continue };
         let result = handle_request(&command, payload, connection_id, &outgoing, &state);
@@ -802,6 +845,44 @@ fn capture_ps_table() -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn replay_agent_presence(state: &DaemonState, outgoing: &mpsc::Sender<WireMessage>) {
+    let snapshot: Vec<(String, String, Option<AgentId>)> = {
+        let Ok(last) = state.last_presence.lock() else {
+            return;
+        };
+        let Ok(sessions) = state.sessions.lock() else {
+            return;
+        };
+        last.iter()
+            .filter_map(|(session_id, agent_id)| {
+                let agent_id = (*agent_id)?;
+                let context_id = sessions
+                    .get(session_id)
+                    .map(|session| session.context_id.clone())
+                    .unwrap_or_default();
+                Some((session_id.clone(), context_id, Some(agent_id)))
+            })
+            .collect()
+    };
+    for (session_id, context_id, agent_id) in snapshot {
+        let payload = json!({
+            "contextId": context_id,
+            "agentId": agent_id.map(|id| id.as_str()),
+            "processName": Value::Null,
+        });
+        let Ok(bytes) = serde_json::to_vec(&payload) else {
+            continue;
+        };
+        let event = WireMessage::Event {
+            version: PROTOCOL_VERSION,
+            event: "agentPresence".into(),
+            session_id,
+            data: Some(bytes),
+        };
+        let _ = outgoing.send(event);
+    }
 }
 
 fn broadcast_agent_presence(
