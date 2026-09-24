@@ -66,7 +66,9 @@ import { subscribeAgentPresence } from "@/lib/agents/presence-store";
 import { findSessionLocation } from "@/lib/agents/resolve-session";
 import type { AgentPresence } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
+import { defaultSelectedRelPaths } from "@/lib/dep-link/default-selected-rel-paths";
 import { basedOnLabel, resolveBasedOnPath } from "@/lib/dep-link/resolve-based-on";
+import { relPathLabel } from "@/lib/dep-link/rel-path-label";
 import { matchKeybinding } from "@/lib/keybindings";
 import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
@@ -90,6 +92,7 @@ import type {
   ExistingWorktree,
   InspectResult,
   Project,
+  ScanNodeModulesResult,
   Selection,
   Worktree,
 } from "@/types";
@@ -315,7 +318,9 @@ export default function App() {
   const [localBranches, setLocalBranches] = useState<string[]>([]);
   const [worktreeParent, setWorktreeParent] = useState("");
   const [linkNodeModules, setLinkNodeModules] = useState(false);
-  const [basedOnSourceOk, setBasedOnSourceOk] = useState(false);
+  const [createScan, setCreateScan] = useState<ScanNodeModulesResult | null>(null);
+  const [createSelectedRels, setCreateSelectedRels] = useState<string[]>([]);
+  const [createPackagesOpen, setCreatePackagesOpen] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Worktree | null>(null);
   const [deleteBranchToo, setDeleteBranchToo] = useState(false);
@@ -426,59 +431,66 @@ export default function App() {
     return resolveBasedOnPath(createProject, startFrom, worktrees);
   }, [createProject, startFrom, worktrees]);
 
-  // Probe based-on source for create-dialog checkbox. Refresh basedOnSourceOk on
-  // snapshot ticks, but only (re)default linkNodeModules when the based-on identity
-  // changes, when source becomes not-ok (force off), or when source recovers to ok.
-  const basedOnProbeKeyRef = useRef<string | null>(null);
-  const basedOnSourceOkRef = useRef(false);
+  // Scan based-on source for create-dialog multi-select. Re-scan when based-on
+  // identity changes; toast truncated notice once per identity.
+  const createScanKeyRef = useRef<string | null>(null);
+  const createTruncatedToastKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!createProjectId || !basedOnPath) {
-      basedOnProbeKeyRef.current = null;
-      basedOnSourceOkRef.current = false;
-      setBasedOnSourceOk(false);
+      createScanKeyRef.current = null;
+      setCreateScan(null);
+      setCreateSelectedRels([]);
       setLinkNodeModules(false);
+      setCreatePackagesOpen(false);
       return;
     }
     const identityKey = `${createProjectId}::${startFrom}::${basedOnPath}`;
-    const identityChanged = basedOnProbeKeyRef.current !== identityKey;
+    if (createScanKeyRef.current === identityKey) {
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
-        const items = await api.getWorktreeDepLinkStatus([basedOnPath]);
+        const scan = await api.scanWorktreeNodeModules(basedOnPath);
         if (cancelled) {
           return;
         }
-        const ok = items[0]?.sourceOk ?? false;
-        const prevOk = basedOnSourceOkRef.current;
-        basedOnProbeKeyRef.current = identityKey;
-        basedOnSourceOkRef.current = ok;
-        setBasedOnSourceOk(ok);
-        if (identityChanged) {
-          // Open dialog / basedOnPath or startFrom change → default to source availability
-          setLinkNodeModules(ok);
-        } else if (!ok) {
-          // Source became not-ok → force off (disabled via basedOnSourceOk)
+        createScanKeyRef.current = identityKey;
+        setCreateScan(scan);
+        if (scan.relPaths.length === 0) {
+          setCreateSelectedRels([]);
           setLinkNodeModules(false);
-        } else if (!prevOk) {
-          // Source recovered to ok after not-ok → default on
-          setLinkNodeModules(true);
+          setCreatePackagesOpen(false);
+          return;
         }
-        // else: source stayed ok — keep user's checkbox choice across snapshot refreshes
+        setCreateSelectedRels(
+          defaultSelectedRelPaths({
+            mode: "link",
+            available: scan.relPaths,
+            recorded: [],
+          }),
+        );
+        setLinkNodeModules(true);
+        if (scan.truncated && createTruncatedToastKeyRef.current !== identityKey) {
+          createTruncatedToastKeyRef.current = identityKey;
+          toast.message("已截断，仅显示前 50 个");
+        }
       } catch {
         if (cancelled) {
           return;
         }
-        basedOnProbeKeyRef.current = identityKey;
-        basedOnSourceOkRef.current = false;
-        setBasedOnSourceOk(false);
+        createScanKeyRef.current = identityKey;
+        setCreateScan(null);
+        setCreateSelectedRels([]);
         setLinkNodeModules(false);
+        setCreatePackagesOpen(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [createProjectId, startFrom, basedOnPath, snapshot]);
+  }, [createProjectId, startFrom, basedOnPath]);
 
   const selectedContextId =
     selection.kind === "main"
@@ -1068,7 +1080,11 @@ export default function App() {
       setStartFromQuery("");
       setWorktreeParent(parent);
       setLinkNodeModules(false);
-      setBasedOnSourceOk(false);
+      setCreateScan(null);
+      setCreateSelectedRels([]);
+      setCreatePackagesOpen(false);
+      createScanKeyRef.current = null;
+      createTruncatedToastKeyRef.current = null;
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -1102,7 +1118,7 @@ export default function App() {
       applySnapshot(mutation.snapshot, focusedId);
       if (mutation.error) {
         toast.error(mutation.error);
-      } else if (linkNodeModules && focusedId) {
+      } else if (linkNodeModules && focusedId && createSelectedRels.length > 0) {
         const created = mutation.snapshot.worktrees.find((w) => w.id === focusedId);
         const project = mutation.snapshot.projects.find((p) => p.id === createProjectId);
         if (created && project) {
@@ -1110,9 +1126,13 @@ export default function App() {
             created.basedOnPath ??
             resolveBasedOnPath(project, startFrom.trim(), mutation.snapshot.worktrees);
           try {
-            const linkResult = await api.linkWorktreeNodeModules(created.path, source, false);
+            const linkResult = await api.linkWorktreeNodeModulesBatch(
+              created.path,
+              source,
+              createSelectedRels,
+              false,
+            );
             if (linkResult.status === "needsConfirm") {
-              // create path: target should be empty — unexpected; toast and skip
               toast.error("目标已有 node_modules，请稍后在菜单中链接");
             } else {
               applySnapshot(linkResult.snapshot, focusedId);
@@ -1124,7 +1144,11 @@ export default function App() {
       }
       setCreateProjectId(null);
       setLinkNodeModules(false);
-      setBasedOnSourceOk(false);
+      setCreateScan(null);
+      setCreateSelectedRels([]);
+      setCreatePackagesOpen(false);
+      createScanKeyRef.current = null;
+      createTruncatedToastKeyRef.current = null;
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -2025,19 +2049,62 @@ export default function App() {
               </div>
             </div>
             {createProject && basedOnPath ? (
-              <label className={cn("flex items-start gap-2 text-sm", !basedOnSourceOk && "opacity-50")}>
+              <label className={cn("flex items-start gap-2 text-sm", !(createScan && createScan.relPaths.length) && "opacity-50")}>
                 <Checkbox
                   checked={linkNodeModules}
-                  disabled={!basedOnSourceOk}
-                  onCheckedChange={(v) => setLinkNodeModules(v === true)}
+                  disabled={!createScan || createScan.relPaths.length === 0}
+                  onCheckedChange={(v) => {
+                    const on = v === true;
+                    setLinkNodeModules(on);
+                    if (on && createScan) {
+                      setCreateSelectedRels(
+                        defaultSelectedRelPaths({
+                          mode: "link",
+                          available: createScan.relPaths,
+                          recorded: [],
+                        }),
+                      );
+                    }
+                  }}
                 />
-                <span className="grid gap-0.5">
-                  <span>链接源的 node_modules</span>
+                <span className="grid gap-0.5 flex-1">
+                  <span className="flex items-center justify-between gap-2">
+                    <span>链接源的 node_modules</span>
+                    {linkNodeModules && createScan && createScan.relPaths.length > 0 ? (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline"
+                        onClick={() => setCreatePackagesOpen((o) => !o)}
+                      >
+                        {createPackagesOpen
+                          ? "收起"
+                          : `已选 ${createSelectedRels.length}/${createScan.relPaths.length}`}
+                      </button>
+                    ) : null}
+                  </span>
                   <span className="text-xs text-muted-foreground">
-                    {basedOnSourceOk
+                    {createScan && createScan.relPaths.length > 0
                       ? `源：${basedOnLabel(createProject, basedOnPath, worktrees)}`
                       : "源尚无 node_modules"}
                   </span>
+                  {createPackagesOpen && createScan ? (
+                    <div className="mt-1 max-h-40 overflow-auto grid gap-1 border rounded-md p-2">
+                      {createScan.relPaths.map((rel) => (
+                        <label key={rel || "__root"} className="flex items-center gap-2 text-xs">
+                          <Checkbox
+                            checked={createSelectedRels.includes(rel)}
+                            onCheckedChange={(v) => {
+                              setCreateSelectedRels((prev) => {
+                                if (v === true) return prev.includes(rel) ? prev : [...prev, rel];
+                                return prev.filter((x) => x !== rel);
+                              });
+                            }}
+                          />
+                          <span>{relPathLabel(rel)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
                 </span>
               </label>
             ) : null}
