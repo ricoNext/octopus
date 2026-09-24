@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { invokeError } from "@/lib/api";
-import type { BranchOptions, Project, Selection, Worktree } from "@/types";
+import type { BranchOptions, DepLinkStatus, Project, Selection, Worktree } from "@/types";
 
 const COLLAPSED_KEY = "octopus.sidebar.collapsedProjectIds";
 
@@ -84,6 +84,9 @@ type SidebarProps = {
   onOpenEditor: (path: string) => void;
   editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
+  onLinkNodeModules: (worktree: Worktree) => void;
+  onRelinkNodeModules: (worktree: Worktree) => void;
+  onUnlinkNodeModules: (worktree: Worktree) => void;
   settingsActive?: boolean;
   onOpenSettings: () => void;
   collapsed?: boolean;
@@ -186,6 +189,10 @@ type WorktreeMenuItemsProps = {
   onAbandonWorktree: (worktreeId: string) => void;
   onRemoveMissing: (worktreeId: string) => void;
   onDeleteWorktree: (worktreeId: string) => void;
+  depLinkStatus?: DepLinkStatus;
+  onLinkNodeModules: (worktree: Worktree) => void;
+  onRelinkNodeModules: (worktree: Worktree) => void;
+  onUnlinkNodeModules: (worktree: Worktree) => void;
 };
 
 function WorktreeMenuItems({
@@ -197,6 +204,10 @@ function WorktreeMenuItems({
   onAbandonWorktree,
   onRemoveMissing,
   onDeleteWorktree,
+  depLinkStatus = "none",
+  onLinkNodeModules,
+  onRelinkNodeModules,
+  onUnlinkNodeModules,
 }: WorktreeMenuItemsProps) {
   return (
     <>
@@ -220,6 +231,25 @@ function WorktreeMenuItems({
           <DropdownMenuItem onClick={() => onAbandonWorktree(worktree.id)}>
             放弃
           </DropdownMenuItem>
+        </>
+      ) : null}
+      {!worktree.missing && worktree.status === "ready" ? (
+        <>
+          {depLinkStatus === "linked" ? (
+            <DropdownMenuItem onClick={() => onRelinkNodeModules(worktree)}>
+              重新链接 node_modules…
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={() => onLinkNodeModules(worktree)}>
+              链接 node_modules…
+            </DropdownMenuItem>
+          )}
+          {depLinkStatus === "linked" || depLinkStatus === "broken" ? (
+            <DropdownMenuItem onClick={() => onUnlinkNodeModules(worktree)}>
+              取消链接
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
         </>
       ) : null}
       {worktree.missing ? (
@@ -255,6 +285,9 @@ export function Sidebar({
   onOpenEditor,
   editorConfigured,
   onRevealFinder,
+  onLinkNodeModules,
+  onRelinkNodeModules,
+  onUnlinkNodeModules,
   settingsActive = false,
   onOpenSettings,
   collapsed = false,
@@ -663,6 +696,10 @@ export function Sidebar({
                                   onAbandonWorktree={onAbandonWorktree}
                                   onRemoveMissing={onRemoveMissing}
                                   onDeleteWorktree={onDeleteWorktree}
+                                  depLinkStatus={worktree.depLink?.status ?? "none"}
+                                  onLinkNodeModules={onLinkNodeModules}
+                                  onRelinkNodeModules={onRelinkNodeModules}
+                                  onUnlinkNodeModules={onUnlinkNodeModules}
                                 />
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -724,6 +761,10 @@ export function Sidebar({
                   onAbandonWorktree={onAbandonWorktree}
                   onRemoveMissing={onRemoveMissing}
                   onDeleteWorktree={onDeleteWorktree}
+                  depLinkStatus={contextWorktree.depLink?.status ?? "none"}
+                  onLinkNodeModules={onLinkNodeModules}
+                  onRelinkNodeModules={onRelinkNodeModules}
+                  onUnlinkNodeModules={onUnlinkNodeModules}
                 />
               ) : null}
             </DropdownMenuContent>

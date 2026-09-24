@@ -86,6 +86,7 @@ import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
+  DepLinkStatusItem,
   ExistingWorktree,
   InspectResult,
   Project,
@@ -108,6 +109,21 @@ type RenameTabTarget = {
   contextId: string;
   tabId: string;
 };
+
+type LinkPickerState = {
+  target: Worktree;
+  mode: "link" | "relink";
+  sources: DepLinkStatusItem[];
+  selectedSource: string;
+} | null;
+
+type OverwriteState = {
+  targetPath: string;
+  sourcePath: string;
+  conflict: "directory" | "symlink" | string;
+} | null;
+
+type UnlinkConfirmState = Worktree | null;
 
 type PersistedTerminalState = {
   version?: number;
@@ -309,6 +325,13 @@ export default function App() {
 
   const [removeProjectId, setRemoveProjectId] = useState<string | null>(null);
   const [removeProjectCount, setRemoveProjectCount] = useState(0);
+
+  const [linkPicker, setLinkPicker] = useState<LinkPickerState>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<OverwriteState>(null);
+  const [unlinkConfirm, setUnlinkConfirm] = useState<UnlinkConfirmState>(null);
+  const overwriteConfirmRef = useRef<OverwriteState>(null);
+  const unlinkConfirmRef = useRef<UnlinkConfirmState>(null);
+  const linkPickerRef = useRef<LinkPickerState>(null);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -1309,6 +1332,96 @@ export default function App() {
     [tabsByContext, worktrees, projects],
   );
 
+  async function openLinkPicker(worktree: Worktree, mode: "link" | "relink") {
+    try {
+      const sources = await api.listNodeModulesLinkSources(worktree.projectId, worktree.path);
+      if (sources.length === 0) {
+        toast.error("同项目没有可用的 node_modules 源");
+        return;
+      }
+      const basedOn = worktree.basedOnPath ?? null;
+      const selectedSource =
+        basedOn && sources.some((item) => item.path === basedOn)
+          ? basedOn
+          : sources[0].path;
+      const next = {
+        target: worktree,
+        mode,
+        sources,
+        selectedSource,
+      } as Exclude<LinkPickerState, null>;
+      linkPickerRef.current = next;
+      setLinkPicker(next);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function confirmLinkFromPicker(force: boolean) {
+    const picker = linkPickerRef.current;
+    const overwrite = overwriteConfirmRef.current;
+    const targetPath = force ? overwrite?.targetPath : picker?.target.path;
+    const sourcePath = force ? overwrite?.sourcePath : picker?.selectedSource;
+    if (!targetPath || !sourcePath) {
+      return;
+    }
+    try {
+      const result = await api.linkWorktreeNodeModules(targetPath, sourcePath, force);
+      if (result.status === "needsConfirm") {
+        const next = {
+          targetPath,
+          sourcePath,
+          conflict: result.conflict,
+        } as Exclude<OverwriteState, null>;
+        overwriteConfirmRef.current = next;
+        setOverwriteConfirm(next);
+        linkPickerRef.current = null;
+        setLinkPicker(null);
+        return;
+      }
+      applySnapshot(result.snapshot);
+      linkPickerRef.current = null;
+      setLinkPicker(null);
+      overwriteConfirmRef.current = null;
+      setOverwriteConfirm(null);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function confirmUnlink() {
+    const target = unlinkConfirmRef.current;
+    if (!target) {
+      return;
+    }
+    try {
+      const next = await api.unlinkWorktreeNodeModules(target.path);
+      applySnapshot(next);
+      unlinkConfirmRef.current = null;
+      setUnlinkConfirm(null);
+    } catch (error) {
+      const message = invokeError(error);
+      if (message.includes("不是软链")) {
+        toast.error("本地安装，不是软链");
+      } else {
+        toast.error(message);
+      }
+      unlinkConfirmRef.current = null;
+      setUnlinkConfirm(null);
+    }
+  }
+
+  function linkPickerSourceLabel(sourcePath: string): string {
+    if (!linkPicker) {
+      return sourcePath;
+    }
+    const project = projects.find((item) => item.id === linkPicker.target.projectId);
+    if (!project) {
+      return sourcePath;
+    }
+    return basedOnLabel(project, sourcePath, worktrees);
+  }
+
   function selectWorkspace(selection: Selection) {
     setView("workspace");
     setSelection(selection);
@@ -1359,6 +1472,12 @@ export default function App() {
           onOpenEditor={(path) => void handleOpenEditor(path)}
           editorConfigured={Boolean(defaultEditor.trim())}
           onRevealFinder={(path) => void handleRevealFinder(path)}
+          onLinkNodeModules={(worktree) => void openLinkPicker(worktree, "link")}
+          onRelinkNodeModules={(worktree) => void openLinkPicker(worktree, "relink")}
+          onUnlinkNodeModules={(worktree) => {
+            unlinkConfirmRef.current = worktree;
+            setUnlinkConfirm(worktree);
+          }}
           onListBranchOptions={(projectId) => api.listBranchOptions(projectId)}
           onSwitchMainBranch={handleSwitchMainBranch}
           onOpenSettings={() => setView("settings")}
@@ -1906,6 +2025,121 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={Boolean(linkPicker)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setLinkPicker(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {linkPicker?.mode === "relink" ? "重新链接 node_modules" : "链接 node_modules"}
+            </DialogTitle>
+            <DialogDescription>
+              选择同项目中已有 node_modules 的源。目标：
+              {linkPicker ? ` ${linkPicker.target.branchName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-56 overflow-y-auto rounded-md border p-1">
+            {linkPicker?.sources.map((source) => (
+              <button
+                type="button"
+                key={source.path}
+                className={cn(
+                  "block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted",
+                  source.path === linkPicker.selectedSource && "bg-muted font-medium",
+                )}
+                onClick={() =>
+                  setLinkPicker((current) => {
+                    if (!current) {
+                      return current;
+                    }
+                    const next = { ...current, selectedSource: source.path };
+                    linkPickerRef.current = next;
+                    return next;
+                  })
+                }
+              >
+                <span className="block">{linkPickerSourceLabel(source.path)}</span>
+                <span className="block truncate text-xs text-muted-foreground">{source.path}</span>
+              </button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                linkPickerRef.current = null;
+                setLinkPicker(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={!linkPicker?.selectedSource}
+              onClick={() => void confirmLinkFromPicker(false)}
+            >
+              链接
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(overwriteConfirm)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOverwriteConfirm(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>覆盖并链接 node_modules</AlertDialogTitle>
+            <AlertDialogDescription>
+              {overwriteConfirm?.conflict === "directory"
+                ? "将删除现有真实 node_modules 目录，并链接到所选源。此操作不可从本应用撤销。"
+                : overwriteConfirm?.conflict === "symlink"
+                  ? "将替换现有 node_modules 软链。"
+                  : `目标已有 node_modules（${overwriteConfirm?.conflict ?? ""}），覆盖后将链接到所选源。`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmLinkFromPicker(true)}>
+              覆盖并链接
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(unlinkConfirm)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUnlinkConfirm(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消链接</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定取消 node_modules 软链？不会自动安装依赖。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmUnlink()}>
+              取消链接
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={Boolean(deleteTarget) && !forceStderr}
