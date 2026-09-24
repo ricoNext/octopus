@@ -21,6 +21,8 @@ export type Worktree = {
   status: WorktreeStatus;
   errorMessage?: string | null;
   missing: boolean;
+  basedOnPath?: string | null;
+  depLink?: DepLink | null;
 };
 
 export type AppSnapshot = {

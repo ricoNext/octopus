@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::dep_link::{self, LinkError, ProbeStatus};
 use crate::git::same_path;
 use crate::models::{
-    AppSnapshot, DeleteResult, DepLinkStatus, DepLinkStatusItem, InspectResult,
+    AppSnapshot, DeleteResult, DepLink, DepLinkStatus, DepLinkStatusItem, InspectResult,
     LinkNodeModulesResult, RefreshProjectWorktreesResult, RemoveProjectResult, Store,
 };
 use crate::pty::PtyManager;
@@ -67,6 +67,7 @@ fn locked_store(state: &AppState) -> Result<std::sync::MutexGuard<'_, Store>, St
 pub fn load_snapshot(state: State<AppState>) -> Result<AppSnapshot, String> {
     let mut store = locked_store(&state)?;
     store.reconcile();
+    store.hydrate_dep_links();
     persist(&state, &store)?;
     Ok(store.snapshot())
 }
@@ -206,6 +207,7 @@ pub fn refresh_project_worktrees(
         state.ptys.kill_context(id);
     }
     store.reconcile();
+    store.hydrate_dep_links();
     persist(&state, &store)?;
     Ok(RefreshProjectWorktreesResult {
         snapshot: store.snapshot(),
@@ -411,9 +413,11 @@ pub fn link_worktree_node_modules(
     source_path: String,
     force: bool,
 ) -> Result<LinkNodeModulesResult, String> {
-    let store = locked_store(&state)?;
-    let (project, worktree_paths) = project_context_for_path(&store, &target_path)?;
-    let main_root = PathBuf::from(&project.root_path);
+    let mut store = locked_store(&state)?;
+    let (main_root, worktree_paths) = {
+        let (project, worktree_paths) = project_context_for_path(&store, &target_path)?;
+        (PathBuf::from(&project.root_path), worktree_paths)
+    };
     match dep_link::link_node_modules(
         Path::new(&target_path),
         Path::new(&source_path),
@@ -421,9 +425,25 @@ pub fn link_worktree_node_modules(
         &worktree_paths,
         force,
     ) {
-        Ok(()) => Ok(LinkNodeModulesResult::Ok {
-            snapshot: store.snapshot(),
-        }),
+        Ok(()) => {
+            if let Some(worktree) = store
+                .worktrees
+                .iter_mut()
+                .find(|wt| same_path(Path::new(&wt.path), Path::new(&target_path)))
+            {
+                worktree.dep_link = Some(DepLink {
+                    kind: "node_modules".into(),
+                    status: DepLinkStatus::Linked,
+                    linked_from: Some(source_path.clone()),
+                    linked_at: None,
+                });
+            }
+            store.hydrate_dep_links();
+            persist(&state, &store)?;
+            Ok(LinkNodeModulesResult::Ok {
+                snapshot: store.snapshot(),
+            })
+        }
         Err(LinkError::NeedsConfirm { is_symlink }) => Ok(LinkNodeModulesResult::NeedsConfirm {
             conflict: if is_symlink {
                 "symlink".into()
@@ -440,9 +460,18 @@ pub fn unlink_worktree_node_modules(
     state: State<AppState>,
     target_path: String,
 ) -> Result<AppSnapshot, String> {
-    let store = locked_store(&state)?;
+    let mut store = locked_store(&state)?;
     let _ = project_context_for_path(&store, &target_path)?;
     dep_link::unlink_node_modules(Path::new(&target_path)).map_err(map_link_error)?;
+    if let Some(worktree) = store
+        .worktrees
+        .iter_mut()
+        .find(|wt| same_path(Path::new(&wt.path), Path::new(&target_path)))
+    {
+        worktree.dep_link = None;
+    }
+    store.hydrate_dep_links();
+    persist(&state, &store)?;
     Ok(store.snapshot())
 }
 

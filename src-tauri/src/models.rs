@@ -38,6 +38,10 @@ pub struct Worktree {
     pub status: WorktreeStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dep_link: Option<DepLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

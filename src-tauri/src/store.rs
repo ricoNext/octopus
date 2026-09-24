@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::git::{canonicalize_or, same_path, worktree_list};
 use crate::models::{
-    AppSnapshot, ProjectView, Store, WorktreeStatus, WorktreeView,
+    AppSnapshot, DepLink, DepLinkStatus, ProjectView, Store, WorktreeStatus, WorktreeView,
 };
 
 impl Store {
@@ -53,6 +53,41 @@ impl Store {
                     worktree.status = WorktreeStatus::Error;
                     worktree.error_message =
                         Some("创建中断，工作树未出现在 git worktree 列表中。".into());
+                }
+            }
+        }
+    }
+
+
+    pub fn hydrate_dep_links(&mut self) {
+        for wt in &mut self.worktrees {
+            let probe = crate::dep_link::probe_target(Path::new(&wt.path));
+            match probe.status {
+                crate::dep_link::ProbeStatus::None => {
+                    // Real dir or missing: clear linked metadata status but keep None entry absent
+                    if wt.dep_link.is_some() {
+                        wt.dep_link = None;
+                    }
+                }
+                crate::dep_link::ProbeStatus::Linked => {
+                    let from = probe
+                        .linked_from
+                        .map(|p| p.to_string_lossy().to_string())
+                        .or_else(|| wt.dep_link.as_ref().and_then(|d| d.linked_from.clone()));
+                    wt.dep_link = Some(DepLink {
+                        kind: "node_modules".into(),
+                        status: DepLinkStatus::Linked,
+                        linked_from: from,
+                        linked_at: None,
+                    });
+                }
+                crate::dep_link::ProbeStatus::Broken => {
+                    wt.dep_link = Some(DepLink {
+                        kind: "node_modules".into(),
+                        status: DepLinkStatus::Broken,
+                        linked_from: wt.dep_link.as_ref().and_then(|d| d.linked_from.clone()),
+                        linked_at: None,
+                    });
                 }
             }
         }
