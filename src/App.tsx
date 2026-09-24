@@ -66,6 +66,7 @@ import { subscribeAgentPresence } from "@/lib/agents/presence-store";
 import { findSessionLocation } from "@/lib/agents/resolve-session";
 import type { AgentPresence } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
+import { basedOnLabel, resolveBasedOnPath } from "@/lib/dep-link/resolve-based-on";
 import { matchKeybinding } from "@/lib/keybindings";
 import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
@@ -297,6 +298,8 @@ export default function App() {
   const [startFromQuery, setStartFromQuery] = useState("");
   const [localBranches, setLocalBranches] = useState<string[]>([]);
   const [worktreeParent, setWorktreeParent] = useState("");
+  const [linkNodeModules, setLinkNodeModules] = useState(false);
+  const [basedOnSourceOk, setBasedOnSourceOk] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Worktree | null>(null);
   const [deleteBranchToo, setDeleteBranchToo] = useState(false);
@@ -388,6 +391,46 @@ export default function App() {
     }
     return null;
   }, [projects, selectedWorktree, selection]);
+
+  const createProject = useMemo(
+    () => projects.find((item) => item.id === createProjectId) ?? null,
+    [projects, createProjectId],
+  );
+  const basedOnPath = useMemo(() => {
+    if (!createProject || !startFrom) {
+      return null;
+    }
+    return resolveBasedOnPath(createProject, startFrom, worktrees);
+  }, [createProject, startFrom, worktrees]);
+
+  useEffect(() => {
+    if (!createProjectId || !basedOnPath) {
+      setBasedOnSourceOk(false);
+      setLinkNodeModules(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const items = await api.getWorktreeDepLinkStatus([basedOnPath]);
+        if (cancelled) {
+          return;
+        }
+        const ok = items[0]?.sourceOk ?? false;
+        setBasedOnSourceOk(ok);
+        setLinkNodeModules(ok);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setBasedOnSourceOk(false);
+        setLinkNodeModules(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [createProjectId, startFrom, basedOnPath, snapshot]);
 
   const selectedContextId =
     selection.kind === "main"
@@ -976,6 +1019,8 @@ export default function App() {
       setStartFrom(initialStartFrom);
       setStartFromQuery("");
       setWorktreeParent(parent);
+      setLinkNodeModules(false);
+      setBasedOnSourceOk(false);
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -1005,11 +1050,33 @@ export default function App() {
         startFrom.trim() ? startFrom.trim() : null,
         worktreeParent.trim() ? worktreeParent.trim() : null,
       );
-      applySnapshot(mutation.snapshot, mutation.focusedWorktreeId);
+      const focusedId = mutation.focusedWorktreeId;
+      applySnapshot(mutation.snapshot, focusedId);
       if (mutation.error) {
         toast.error(mutation.error);
+      } else if (linkNodeModules && focusedId) {
+        const created = mutation.snapshot.worktrees.find((w) => w.id === focusedId);
+        const project = mutation.snapshot.projects.find((p) => p.id === createProjectId);
+        if (created && project) {
+          const source =
+            created.basedOnPath ??
+            resolveBasedOnPath(project, startFrom.trim(), mutation.snapshot.worktrees);
+          try {
+            const linkResult = await api.linkWorktreeNodeModules(created.path, source, false);
+            if (linkResult.status === "needsConfirm") {
+              // create path: target should be empty — unexpected; toast and skip
+              toast.error("目标已有 node_modules，请稍后在菜单中链接");
+            } else {
+              applySnapshot(linkResult.snapshot, focusedId);
+            }
+          } catch (error) {
+            toast.error(`工作树已创建，但链接 node_modules 失败：${invokeError(error)}`);
+          }
+        }
       }
       setCreateProjectId(null);
+      setLinkNodeModules(false);
+      setBasedOnSourceOk(false);
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -1811,6 +1878,23 @@ export default function App() {
                 ))}
               </div>
             </div>
+            {createProject && basedOnPath ? (
+              <label className={cn("flex items-start gap-2 text-sm", !basedOnSourceOk && "opacity-50")}>
+                <Checkbox
+                  checked={linkNodeModules}
+                  disabled={!basedOnSourceOk}
+                  onCheckedChange={(v) => setLinkNodeModules(v === true)}
+                />
+                <span className="grid gap-0.5">
+                  <span>链接源的 node_modules</span>
+                  <span className="text-xs text-muted-foreground">
+                    {basedOnSourceOk
+                      ? `源：${basedOnLabel(createProject, basedOnPath, worktrees)}`
+                      : "源尚无 node_modules"}
+                  </span>
+                </span>
+              </label>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateProjectId(null)}>
