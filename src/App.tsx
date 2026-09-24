@@ -426,12 +426,22 @@ export default function App() {
     return resolveBasedOnPath(createProject, startFrom, worktrees);
   }, [createProject, startFrom, worktrees]);
 
+  // Probe based-on source for create-dialog checkbox. Refresh basedOnSourceOk on
+  // snapshot ticks, but only (re)default linkNodeModules when the based-on identity
+  // changes, when source becomes not-ok (force off), or when source recovers to ok.
+  const basedOnProbeKeyRef = useRef<string | null>(null);
+  const basedOnSourceOkRef = useRef(false);
+
   useEffect(() => {
     if (!createProjectId || !basedOnPath) {
+      basedOnProbeKeyRef.current = null;
+      basedOnSourceOkRef.current = false;
       setBasedOnSourceOk(false);
       setLinkNodeModules(false);
       return;
     }
+    const identityKey = `${createProjectId}::${startFrom}::${basedOnPath}`;
+    const identityChanged = basedOnProbeKeyRef.current !== identityKey;
     let cancelled = false;
     void (async () => {
       try {
@@ -440,12 +450,27 @@ export default function App() {
           return;
         }
         const ok = items[0]?.sourceOk ?? false;
+        const prevOk = basedOnSourceOkRef.current;
+        basedOnProbeKeyRef.current = identityKey;
+        basedOnSourceOkRef.current = ok;
         setBasedOnSourceOk(ok);
-        setLinkNodeModules(ok);
+        if (identityChanged) {
+          // Open dialog / basedOnPath or startFrom change → default to source availability
+          setLinkNodeModules(ok);
+        } else if (!ok) {
+          // Source became not-ok → force off (disabled via basedOnSourceOk)
+          setLinkNodeModules(false);
+        } else if (!prevOk) {
+          // Source recovered to ok after not-ok → default on
+          setLinkNodeModules(true);
+        }
+        // else: source stayed ok — keep user's checkbox choice across snapshot refreshes
       } catch {
         if (cancelled) {
           return;
         }
+        basedOnProbeKeyRef.current = identityKey;
+        basedOnSourceOkRef.current = false;
         setBasedOnSourceOk(false);
         setLinkNodeModules(false);
       }
