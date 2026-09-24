@@ -1,15 +1,17 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::dep_link::{self, LinkError, ProbeStatus};
+use crate::dep_link::{self, BatchUnlinkNoticeKind, LinkError, ProbeStatus};
 use crate::git::same_path;
 use crate::models::{
-    AppSnapshot, DeleteResult, DepLink, DepLinkStatus, DepLinkStatusItem, InspectResult,
-    LinkNodeModulesResult, RefreshProjectWorktreesResult, RemoveProjectResult, Store,
+    AppSnapshot, DeleteResult, DepLink, DepLinkEntry, DepLinkStatus, DepLinkStatusItem,
+    InspectResult, LinkNodeModulesResult, RefreshProjectWorktreesResult, RemoveProjectResult,
+    ScanNodeModulesResult, Store, UnlinkNodeModulesBatchResult,
 };
 use crate::pty::PtyManager;
 use crate::workspace::{self, CreateOutcome};
@@ -411,21 +413,83 @@ fn status_item_for_root(root: &Path) -> DepLinkStatusItem {
     }
 }
 
-#[tauri::command]
-pub fn link_worktree_node_modules(
-    state: State<AppState>,
-    target_path: String,
-    source_path: String,
+fn prevalidate_batch_link(
+    target_root: &Path,
+    source_root: &Path,
+    rel_paths: &[String],
+) -> Result<(), LinkError> {
+    for rel in rel_paths {
+        let norm = dep_link::normalize_rel_path(rel)?;
+        let target_pkg = dep_link::package_dir(target_root, &norm)?;
+        if !target_pkg.is_dir() {
+            return Err(LinkError::TargetParentMissing);
+        }
+        if !dep_link::source_node_modules_ok_at(source_root, &norm) {
+            let source_pkg = dep_link::package_dir(source_root, &norm)?;
+            let source_nm = source_pkg.join("node_modules");
+            if !source_nm.exists() {
+                return Err(LinkError::SourceMissing);
+            }
+            return Err(LinkError::SourceNotDir);
+        }
+    }
+    Ok(())
+}
+
+fn merge_linked_entries(
+    dep: &mut DepLink,
+    rel_paths: &[String],
+    source_path: &str,
+) {
+    dep_link::migrate_dep_link_links(dep);
+    for rel in rel_paths {
+        let norm = dep_link::normalize_rel_path(rel).unwrap_or_default();
+        let entry = DepLinkEntry {
+            rel_path: norm.clone(),
+            status: DepLinkStatus::Linked,
+            linked_from: Some(source_path.to_string()),
+        };
+        if let Some(existing) = dep.links.iter_mut().find(|e| e.rel_path == norm) {
+            *existing = entry;
+        } else {
+            dep.links.push(entry);
+        }
+    }
+    dep.kind = "node_modules".into();
+    dep.linked_from = Some(source_path.to_string());
+    dep.linked_at = None;
+    dep_link::refresh_dep_link_aggregate(dep);
+}
+
+fn unlink_notice_label(rel: &str) -> String {
+    if rel.is_empty() {
+        "根".into()
+    } else {
+        rel.to_string()
+    }
+}
+
+fn link_batch_inner(
+    state: &AppState,
+    target_path: &str,
+    source_path: &str,
+    rel_paths: &[String],
     force: bool,
 ) -> Result<LinkNodeModulesResult, String> {
-    let mut store = locked_store(&state)?;
+    let mut store = locked_store(state)?;
     let (main_root, worktree_paths) = {
-        let (project, worktree_paths) = project_context_for_path(&store, &target_path)?;
+        let (project, worktree_paths) = project_context_for_path(&store, target_path)?;
         (PathBuf::from(&project.root_path), worktree_paths)
     };
-    match dep_link::link_node_modules(
-        Path::new(&target_path),
-        Path::new(&source_path),
+    dep_link::ensure_same_project(Path::new(source_path), &main_root, &worktree_paths)
+        .map_err(map_link_error)?;
+    // Pre-validate sources/parents before any mutation to avoid partial batch commits.
+    prevalidate_batch_link(Path::new(target_path), Path::new(source_path), rel_paths)
+        .map_err(map_link_error)?;
+    match dep_link::link_node_modules_batch(
+        Path::new(target_path),
+        Path::new(source_path),
+        rel_paths,
         &main_root,
         &worktree_paths,
         force,
@@ -434,30 +498,185 @@ pub fn link_worktree_node_modules(
             if let Some(worktree) = store
                 .worktrees
                 .iter_mut()
-                .find(|wt| same_path(Path::new(&wt.path), Path::new(&target_path)))
+                .find(|wt| same_path(Path::new(&wt.path), Path::new(target_path)))
             {
-                worktree.dep_link = Some(DepLink {
+                let mut dep = worktree.dep_link.take().unwrap_or(DepLink {
                     kind: "node_modules".into(),
-                    status: DepLinkStatus::Linked,
-                    linked_from: Some(source_path.clone()),
+                    status: DepLinkStatus::None,
+                    linked_from: None,
                     linked_at: None,
                     links: vec![],
                 });
+                merge_linked_entries(&mut dep, rel_paths, source_path);
+                worktree.dep_link = Some(dep);
             }
             store.hydrate_dep_links();
-            persist(&state, &store)?;
+            persist(state, &store)?;
             Ok(LinkNodeModulesResult::Ok {
                 snapshot: store.snapshot(),
             })
         }
+        Err(LinkError::NeedsConfirmBatch { conflict_count }) => {
+            Ok(LinkNodeModulesResult::NeedsConfirm {
+                conflict: None,
+                conflict_count,
+            })
+        }
         Err(LinkError::NeedsConfirm { is_symlink }) => Ok(LinkNodeModulesResult::NeedsConfirm {
-            conflict: if is_symlink {
+            conflict: Some(if is_symlink {
                 "symlink".into()
             } else {
                 "directory".into()
-            },
+            }),
+            conflict_count: 1,
         }),
         Err(err) => Err(map_link_error(err)),
+    }
+}
+
+fn unlink_batch_inner(
+    state: &AppState,
+    target_path: &str,
+    rel_paths: Option<Vec<String>>,
+) -> Result<UnlinkNodeModulesBatchResult, String> {
+    let mut store = locked_store(state)?;
+    let _ = project_context_for_path(&store, target_path)?;
+
+    let paths: Vec<String> = {
+        let explicit = rel_paths
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        if explicit {
+            rel_paths.unwrap_or_default()
+        } else {
+            // None or empty → all recorded links for that worktree
+            let Some(worktree) = store
+                .worktrees
+                .iter_mut()
+                .find(|wt| same_path(Path::new(&wt.path), Path::new(target_path)))
+            else {
+                return Ok(UnlinkNodeModulesBatchResult {
+                    snapshot: store.snapshot(),
+                    notices: vec![],
+                });
+            };
+            let Some(dep) = worktree.dep_link.as_mut() else {
+                return Ok(UnlinkNodeModulesBatchResult {
+                    snapshot: store.snapshot(),
+                    notices: vec![],
+                });
+            };
+            dep_link::migrate_dep_link_links(dep);
+            if dep.links.is_empty() {
+                return Ok(UnlinkNodeModulesBatchResult {
+                    snapshot: store.snapshot(),
+                    notices: vec![],
+                });
+            }
+            dep.links.iter().map(|e| e.rel_path.clone()).collect()
+        }
+    };
+
+    let batch = dep_link::unlink_node_modules_batch(Path::new(target_path), &paths);
+    let notices: Vec<String> = batch
+        .notices
+        .iter()
+        .filter(|n| n.kind == BatchUnlinkNoticeKind::NotASymlink)
+        .map(|n| format!("{}: 本地安装，不是软链", unlink_notice_label(&n.rel_path)))
+        .collect();
+
+    if let Some(worktree) = store
+        .worktrees
+        .iter_mut()
+        .find(|wt| same_path(Path::new(&wt.path), Path::new(target_path)))
+    {
+        if let Some(mut dep) = worktree.dep_link.take() {
+            dep_link::migrate_dep_link_links(&mut dep);
+            let unlinked: std::collections::HashSet<String> =
+                batch.unlinked.iter().cloned().collect();
+            dep.links.retain(|e| !unlinked.contains(&e.rel_path));
+            if dep.links.is_empty() {
+                worktree.dep_link = None;
+            } else {
+                dep_link::refresh_dep_link_aggregate(&mut dep);
+                worktree.dep_link = Some(dep);
+            }
+        }
+    }
+
+    store.hydrate_dep_links();
+    persist(state, &store)?;
+    Ok(UnlinkNodeModulesBatchResult {
+        snapshot: store.snapshot(),
+        notices,
+    })
+}
+
+#[tauri::command]
+pub fn scan_worktree_node_modules(
+    state: State<AppState>,
+    source_path: String,
+) -> Result<ScanNodeModulesResult, String> {
+    let store = locked_store(&state)?;
+    let _ = project_context_for_path(&store, &source_path)?;
+    let scan = dep_link::scan_package_node_modules(Path::new(&source_path));
+    Ok(ScanNodeModulesResult {
+        rel_paths: scan.rel_paths,
+        truncated: scan.truncated,
+    })
+}
+
+#[tauri::command]
+pub fn link_worktree_node_modules_batch(
+    state: State<AppState>,
+    target_path: String,
+    source_path: String,
+    rel_paths: Vec<String>,
+    force: bool,
+) -> Result<LinkNodeModulesResult, String> {
+    link_batch_inner(&state, &target_path, &source_path, &rel_paths, force)
+}
+
+#[tauri::command]
+pub fn unlink_worktree_node_modules_batch(
+    state: State<AppState>,
+    target_path: String,
+    rel_paths: Option<Vec<String>>,
+) -> Result<UnlinkNodeModulesBatchResult, String> {
+    unlink_batch_inner(&state, &target_path, rel_paths)
+}
+
+#[tauri::command]
+pub fn link_worktree_node_modules(
+    state: State<AppState>,
+    target_path: String,
+    source_path: String,
+    force: bool,
+) -> Result<LinkNodeModulesResult, String> {
+    let result = link_batch_inner(&state, &target_path, &source_path, &["".to_string()], force)?;
+    match result {
+        LinkNodeModulesResult::NeedsConfirm {
+            conflict_count,
+            conflict,
+        } => {
+            let conflict = conflict.or_else(|| {
+                let nm = Path::new(&target_path).join("node_modules");
+                let is_symlink = fs::symlink_metadata(&nm)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
+                Some(if is_symlink {
+                    "symlink".into()
+                } else {
+                    "directory".into()
+                })
+            });
+            Ok(LinkNodeModulesResult::NeedsConfirm {
+                conflict,
+                conflict_count: conflict_count.max(1),
+            })
+        }
+        other => Ok(other),
     }
 }
 
@@ -466,19 +685,8 @@ pub fn unlink_worktree_node_modules(
     state: State<AppState>,
     target_path: String,
 ) -> Result<AppSnapshot, String> {
-    let mut store = locked_store(&state)?;
-    let _ = project_context_for_path(&store, &target_path)?;
-    dep_link::unlink_node_modules(Path::new(&target_path)).map_err(map_link_error)?;
-    if let Some(worktree) = store
-        .worktrees
-        .iter_mut()
-        .find(|wt| same_path(Path::new(&wt.path), Path::new(&target_path)))
-    {
-        worktree.dep_link = None;
-    }
-    store.hydrate_dep_links();
-    persist(&state, &store)?;
-    Ok(store.snapshot())
+    // Phase 1 API returns snapshot only; notices ignored
+    Ok(unlink_batch_inner(&state, &target_path, Some(vec!["".to_string()]))?.snapshot)
 }
 
 #[tauri::command]
@@ -523,7 +731,14 @@ pub fn list_node_modules_link_sources(
             }
             true
         })
-        .map(|path| status_item_for_root(&path))
+        .map(|path| {
+            let mut item = status_item_for_root(&path);
+            // Monorepo: any package-level node_modules makes the root a usable source.
+            item.source_ok = !dep_link::scan_package_node_modules(&path)
+                .rel_paths
+                .is_empty();
+            item
+        })
         .filter(|item| item.source_ok)
         .collect())
 }

@@ -93,7 +93,21 @@ export type DepLink = {
 
 export type LinkNodeModulesResult =
   | { status: "ok"; snapshot: AppSnapshot }
-  | { status: "needsConfirm"; conflict: "directory" | "symlink" | string };
+  | {
+      status: "needsConfirm";
+      conflict?: "directory" | "symlink" | string | null;
+      conflictCount: number;
+    };
+
+export type ScanNodeModulesResult = {
+  relPaths: string[];
+  truncated: boolean;
+};
+
+export type UnlinkNodeModulesBatchResult = {
+  snapshot: AppSnapshot;
+  notices: string[];
+};
 
 export type DepLinkStatusItem = {
   path: string;

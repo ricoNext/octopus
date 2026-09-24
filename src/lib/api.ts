@@ -10,6 +10,8 @@ import type {
   MutationResult,
   RefreshProjectWorktreesResult,
   RemoveProjectResult,
+  ScanNodeModulesResult,
+  UnlinkNodeModulesBatchResult,
 } from "@/types";
 
 export type TerminalAttachResult = {
@@ -102,6 +104,25 @@ export const api = {
     }),
   unlinkWorktreeNodeModules: (targetPath: string) =>
     invoke<AppSnapshot>("unlink_worktree_node_modules", { targetPath }),
+  scanWorktreeNodeModules: (sourcePath: string) =>
+    invoke<ScanNodeModulesResult>("scan_worktree_node_modules", { sourcePath }),
+  linkWorktreeNodeModulesBatch: (
+    targetPath: string,
+    sourcePath: string,
+    relPaths: string[],
+    force: boolean,
+  ) =>
+    invoke<LinkNodeModulesResult>("link_worktree_node_modules_batch", {
+      targetPath,
+      sourcePath,
+      relPaths,
+      force,
+    }),
+  unlinkWorktreeNodeModulesBatch: (targetPath: string, relPaths: string[] | null) =>
+    invoke<UnlinkNodeModulesBatchResult>("unlink_worktree_node_modules_batch", {
+      targetPath,
+      relPaths,
+    }),
   getWorktreeDepLinkStatus: (paths: string[]) =>
     invoke<DepLinkStatusItem[]>("get_worktree_dep_link_status", { paths }),
   listNodeModulesLinkSources: (projectId: string, excludePath: string | null) =>

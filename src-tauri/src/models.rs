@@ -156,10 +156,30 @@ pub struct DepLink {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanNodeModulesResult {
+    pub rel_paths: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum LinkNodeModulesResult {
     Ok { snapshot: AppSnapshot },
-    NeedsConfirm { conflict: String }, // "directory" | "symlink"
+    /// Phase 1 single-path kept for compat; batch uses conflict_count
+    NeedsConfirm {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conflict: Option<String>, // "directory" | "symlink" for single-path wrapper
+        #[serde(default)]
+        conflict_count: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlinkNodeModulesBatchResult {
+    pub snapshot: AppSnapshot,
+    pub notices: Vec<String>, // Chinese messages for skipped real dirs etc.
 }
 
 #[derive(Debug, Clone, Serialize)]

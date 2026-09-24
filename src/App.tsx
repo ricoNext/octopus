@@ -1393,10 +1393,12 @@ export default function App() {
     try {
       const result = await api.linkWorktreeNodeModules(targetPath, sourcePath, force);
       if (result.status === "needsConfirm") {
+        // Temporary until Task 6 N-copy; keep Phase 1 conflict string for dialog.
+        const n = result.conflictCount ?? (result.conflict ? 1 : 0);
         const next = {
           targetPath,
           sourcePath,
-          conflict: result.conflict,
+          conflict: result.conflict ?? (n > 0 ? "directory" : ""),
         } as Exclude<OverwriteState, null>;
         overwriteConfirmRef.current = next;
         setOverwriteConfirm(next);

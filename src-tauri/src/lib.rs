@@ -110,6 +110,9 @@ pub fn run() {
             commands::list_agent_presence,
             commands::link_worktree_node_modules,
             commands::unlink_worktree_node_modules,
+            commands::scan_worktree_node_modules,
+            commands::link_worktree_node_modules_batch,
+            commands::unlink_worktree_node_modules_batch,
             commands::get_worktree_dep_link_status,
             commands::list_node_modules_link_sources,
         ])
