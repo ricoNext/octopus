@@ -1,5 +1,6 @@
 mod agent_detect;
 mod commands;
+mod dep_link;
 mod git;
 mod models;
 mod paths;
