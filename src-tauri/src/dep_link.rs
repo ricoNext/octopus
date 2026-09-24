@@ -70,6 +70,98 @@ pub fn source_node_modules_ok(source_root: &Path) -> bool {
     meta.is_dir()
 }
 
+pub const SCAN_MAX_DEPTH: u32 = 6;
+pub const SCAN_MAX_RESULTS: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanResult {
+    pub rel_paths: Vec<String>,
+    pub truncated: bool,
+}
+
+fn is_skipped_dir_name(name: &str) -> bool {
+    name == ".git" || name == "node_modules"
+}
+
+/// Returns true if `{root}/node_modules` exists and resolves as a directory.
+fn package_nm_is_dir(package_root: &Path) -> bool {
+    let nm = package_root.join("node_modules");
+    let Ok(meta) = fs::symlink_metadata(&nm) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return fs::metadata(&nm).map(|m| m.is_dir()).unwrap_or(false);
+    }
+    meta.is_dir()
+}
+
+/// BFS/DFS from `source_root`. Depth of `{root}/node_modules` = 1.
+/// Never descends into a directory named `node_modules`.
+/// Always skips directory entries named `.git`.
+/// A hit is recorded only when `{source}/{rel}/node_modules` exists and
+/// ultimately resolves as a directory (symlink-to-dir OK via `source_node_modules_ok_at` semantics).
+pub fn scan_package_node_modules(source_root: &Path) -> ScanResult {
+    let mut rel_paths = Vec::new();
+    let mut truncated = false;
+    // queue: (dir_abs, rel_from_source, depth_of_this_dir)
+    // source_root itself has depth 0; its child node_modules is depth 1.
+    let mut stack = vec![(source_root.to_path_buf(), String::new(), 0u32)];
+
+    while let Some((dir, rel, depth)) = stack.pop() {
+        if rel_paths.len() >= SCAN_MAX_RESULTS {
+            truncated = true;
+            break;
+        }
+        // Check node_modules at this directory (depth+1 when counting the nm entry)
+        if depth < SCAN_MAX_DEPTH && package_nm_is_dir(&dir) {
+            if rel_paths.len() >= SCAN_MAX_RESULTS {
+                truncated = true;
+                break;
+            }
+            rel_paths.push(rel.clone());
+        }
+        if depth >= SCAN_MAX_DEPTH {
+            continue;
+        }
+        let Ok(read) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if is_skipped_dir_name(&name) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            // Follow only real directories (not files). Do not follow symlinked dirs into alien trees:
+            // require is_dir on symlink_metadata without following, OR allow dir metadata.
+            let meta = entry.metadata().ok();
+            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            if !is_dir {
+                continue;
+            }
+            // If the entry itself is named like a symlink to elsewhere, still OK if is_dir.
+            let child_rel = if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{rel}/{name}")
+            };
+            stack.push((entry.path(), child_rel, depth + 1));
+        }
+    }
+
+    rel_paths.sort();
+    // If we stopped early due to cap mid-walk, truncated already true.
+    // Also: if we filled exactly 50 but more siblings remain, best-effort:
+    // re-check by seeing if walk aborted with cap — already set.
+    ScanResult {
+        rel_paths,
+        truncated,
+    }
+}
+
 pub fn probe_target(target_root: &Path) -> ProbeResult {
     let nm = target_root.join("node_modules");
     let Ok(meta) = fs::symlink_metadata(&nm) else {
@@ -270,5 +362,48 @@ mod tests {
         fs::create_dir_all(&wt).unwrap();
         let err = link_node_modules(&wt, &main, &main, &[wt.clone()], false).unwrap_err();
         assert!(matches!(err, LinkError::SourceMissing));
+    }
+
+    #[test]
+    fn scan_finds_root_and_package_nm_skips_nested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("src");
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::create_dir_all(root.join("packages/foo/node_modules")).unwrap();
+        // nested inside package nm — must NOT appear as its own candidate
+        fs::create_dir_all(root.join("packages/foo/node_modules/bar/node_modules")).unwrap();
+        fs::create_dir_all(root.join(".git/node_modules")).unwrap(); // skipped via .git
+        let result = scan_package_node_modules(&root);
+        assert!(!result.truncated);
+        assert_eq!(result.rel_paths, vec!["".to_string(), "packages/foo".to_string()]);
+    }
+
+    #[test]
+    fn scan_depth_limit_six() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("src");
+        // depth 1: root/node_modules
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        // depth 6: a/b/c/d/e/node_modules  (e is depth 5 dir, node_modules depth 6)
+        fs::create_dir_all(root.join("a/b/c/d/e/node_modules")).unwrap();
+        // depth 7: a/b/c/d/e/f/node_modules — beyond limit
+        fs::create_dir_all(root.join("a/b/c/d/e/f/node_modules")).unwrap();
+        let result = scan_package_node_modules(&root);
+        assert!(result.rel_paths.iter().any(|p| p == ""));
+        assert!(result.rel_paths.iter().any(|p| p == "a/b/c/d/e"));
+        assert!(!result.rel_paths.iter().any(|p| p == "a/b/c/d/e/f"));
+    }
+
+    #[test]
+    fn scan_caps_at_fifty_and_sets_truncated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("src");
+        fs::create_dir_all(&root).unwrap();
+        for i in 0..55 {
+            fs::create_dir_all(root.join(format!("pkg{i}/node_modules"))).unwrap();
+        }
+        let result = scan_package_node_modules(&root);
+        assert_eq!(result.rel_paths.len(), 50);
+        assert!(result.truncated);
     }
 }
