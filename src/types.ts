@@ -77,11 +77,18 @@ export type Selection =
 
 export type DepLinkStatus = "none" | "linked" | "broken";
 
+export type DepLinkEntry = {
+  relPath: string;
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+};
+
 export type DepLink = {
   kind: "node_modules";
   status: DepLinkStatus;
   linkedFrom?: string | null;
   linkedAt?: string | null;
+  links?: DepLinkEntry[];
 };
 
 export type LinkNodeModulesResult =

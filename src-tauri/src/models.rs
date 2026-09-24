@@ -132,15 +132,27 @@ impl Default for DepLinkStatus {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLinkEntry {
+    /// "" = repo root; never "."
+    pub rel_path: String,
+    pub status: DepLinkStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepLink {
-    pub kind: String, // always "node_modules" in Phase 1
+    pub kind: String,
     pub status: DepLinkStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_at: Option<String>,
+    #[serde(default)]
+    pub links: Vec<DepLinkEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -83,6 +83,7 @@ impl Store {
                         status: DepLinkStatus::Linked,
                         linked_from: from,
                         linked_at: None,
+                        links: vec![],
                     });
                 }
                 crate::dep_link::ProbeStatus::Broken => {
@@ -91,6 +92,7 @@ impl Store {
                         status: DepLinkStatus::Broken,
                         linked_from: wt.dep_link.as_ref().and_then(|d| d.linked_from.clone()),
                         linked_at: None,
+                        links: vec![],
                     });
                 }
             }
@@ -205,6 +207,7 @@ mod tests {
                 status: DepLinkStatus::Linked,
                 linked_from,
                 linked_at: None,
+                links: vec![],
             }),
         }
     }

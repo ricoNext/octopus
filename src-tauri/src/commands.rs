@@ -436,6 +436,7 @@ pub fn link_worktree_node_modules(
                     status: DepLinkStatus::Linked,
                     linked_from: Some(source_path.clone()),
                     linked_at: None,
+                    links: vec![],
                 });
             }
             store.hydrate_dep_links();

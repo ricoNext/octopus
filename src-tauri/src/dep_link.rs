@@ -237,6 +237,62 @@ pub fn unlink_node_modules(target_root: &Path) -> Result<(), LinkError> {
     fs::remove_file(&target_nm).map_err(|e| LinkError::Io(e.to_string()))
 }
 
+
+use crate::models::{DepLink, DepLinkEntry, DepLinkStatus};
+
+/// any broken → Broken; else any linked → Linked; else None
+pub fn aggregate_status(links: &[DepLinkEntry]) -> DepLinkStatus {
+    if links.iter().any(|l| l.status == DepLinkStatus::Broken) {
+        return DepLinkStatus::Broken;
+    }
+    if links.iter().any(|l| l.status == DepLinkStatus::Linked) {
+        return DepLinkStatus::Linked;
+    }
+    DepLinkStatus::None
+}
+
+/// If `links` empty and top-level looks like Phase 1 (status Linked/Broken or linked_from set),
+/// insert root entry from top-level fields. Always normalize `"."` → `""` on entries.
+/// Returns true if mutation happened.
+pub fn migrate_dep_link_links(dep: &mut DepLink) -> bool {
+    let mut changed = false;
+    for entry in &mut dep.links {
+        if entry.rel_path == "." {
+            entry.rel_path = String::new();
+            changed = true;
+        }
+    }
+    let needs_root = dep.links.is_empty()
+        && (dep.status == DepLinkStatus::Linked
+            || dep.status == DepLinkStatus::Broken
+            || dep.linked_from.is_some());
+    if needs_root {
+        dep.links.push(DepLinkEntry {
+            rel_path: String::new(),
+            status: dep.status.clone(),
+            linked_from: dep.linked_from.clone(),
+        });
+        changed = true;
+    }
+    changed
+}
+
+/// After per-path updates: set dep.status = aggregate; set dep.linked_from =
+/// first linked entry's linked_from (or keep prior if all broken).
+pub fn refresh_dep_link_aggregate(dep: &mut DepLink) {
+    dep.status = aggregate_status(&dep.links);
+    if let Some(from) = dep
+        .links
+        .iter()
+        .find(|l| l.status == DepLinkStatus::Linked)
+        .and_then(|l| l.linked_from.clone())
+    {
+        dep.linked_from = Some(from);
+    } else if dep.status == DepLinkStatus::None {
+        dep.linked_from = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +461,48 @@ mod tests {
         let result = scan_package_node_modules(&root);
         assert_eq!(result.rel_paths.len(), 50);
         assert!(result.truncated);
+    }
+
+    #[test]
+    fn aggregate_prefers_broken_then_linked() {
+        use crate::models::{DepLinkEntry, DepLinkStatus};
+        let links = vec![
+            DepLinkEntry {
+                rel_path: "".into(),
+                status: DepLinkStatus::Linked,
+                linked_from: Some("/a".into()),
+            },
+            DepLinkEntry {
+                rel_path: "packages/foo".into(),
+                status: DepLinkStatus::Broken,
+                linked_from: Some("/a".into()),
+            },
+        ];
+        assert_eq!(aggregate_status(&links), DepLinkStatus::Broken);
+        let only_linked = vec![DepLinkEntry {
+            rel_path: "".into(),
+            status: DepLinkStatus::Linked,
+            linked_from: None,
+        }];
+        assert_eq!(aggregate_status(&only_linked), DepLinkStatus::Linked);
+        assert_eq!(aggregate_status(&[]), DepLinkStatus::None);
+    }
+
+    #[test]
+    fn migrate_phase1_single_path_into_links() {
+        use crate::models::{DepLink, DepLinkStatus};
+        let mut dep = DepLink {
+            kind: "node_modules".into(),
+            status: DepLinkStatus::Linked,
+            linked_from: Some("/repo".into()),
+            linked_at: None,
+            links: vec![],
+        };
+        assert!(migrate_dep_link_links(&mut dep));
+        assert_eq!(dep.links.len(), 1);
+        assert_eq!(dep.links[0].rel_path, "");
+        assert_eq!(dep.links[0].status, DepLinkStatus::Linked);
+        assert_eq!(dep.links[0].linked_from.as_deref(), Some("/repo"));
+        assert!(!migrate_dep_link_links(&mut dep)); // idempotent
     }
 }
