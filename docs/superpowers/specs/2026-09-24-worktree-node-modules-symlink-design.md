@@ -4,6 +4,8 @@ Date: 2026-09-24
 Status: approved  
 Approach: **A** — symlink + remember `basedOnPath` + create checkbox + after-create menu
 
+> Monorepo extension (Phase 1.5): see [2026-09-24-worktree-node-modules-monorepo-design.md](./2026-09-24-worktree-node-modules-monorepo-design.md).
+
 ## Goal
 
 新建 git worktree 时目录里通常没有依赖。允许 worktree **B**（基于 **A** 创建）把 `node_modules` **软链**到 A（或同项目其它已有依赖的目录），避免在 B 再装一份。支持创建时勾选，也支持建好后补链 / 换源 / 取消链接。
