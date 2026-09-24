@@ -1,7 +1,7 @@
 # Worktree 软链 `node_modules`
 
 Date: 2026-09-24  
-Status: draft (pending user review of this file)  
+Status: approved  
 Approach: **A** — symlink + remember `basedOnPath` + create checkbox + after-create menu
 
 ## Goal
