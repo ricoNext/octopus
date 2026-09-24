@@ -9,6 +9,8 @@
 **Tech Stack:** Tauri 2 + Rust (`std::os::unix::fs::symlink`, `tempfile` for tests), React 19 + 现有 Dialog / AlertDialog / Checkbox / DropdownMenu, sonner toast。
 
 **Spec:** `docs/superpowers/specs/2026-09-24-worktree-node-modules-symlink-design.md`
+**Monorepo extension plan:** `docs/superpowers/plans/2026-09-24-worktree-node-modules-monorepo.md`
+
 
 ## Global Constraints
 
