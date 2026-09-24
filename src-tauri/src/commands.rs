@@ -1,13 +1,15 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::dep_link::{self, LinkError, ProbeStatus};
+use crate::git::same_path;
 use crate::models::{
-    AppSnapshot, DeleteResult, InspectResult, RefreshProjectWorktreesResult,
-    RemoveProjectResult, Store,
+    AppSnapshot, DeleteResult, DepLinkStatus, DepLinkStatusItem, InspectResult,
+    LinkNodeModulesResult, RefreshProjectWorktreesResult, RemoveProjectResult, Store,
 };
 use crate::pty::PtyManager;
 use crate::workspace::{self, CreateOutcome};
@@ -329,6 +331,166 @@ pub fn list_agent_presence(
     state: State<AppState>,
 ) -> Result<Vec<crate::pty::AgentPresenceItem>, String> {
     state.ptys.list_agent_presence()
+}
+
+
+fn project_context_for_path<'a>(
+    store: &'a Store,
+    path: &str,
+) -> Result<(&'a crate::models::Project, Vec<PathBuf>), String> {
+    let p = PathBuf::from(path);
+    if let Some(project) = store
+        .projects
+        .iter()
+        .find(|proj| same_path(Path::new(&proj.root_path), &p))
+    {
+        let wts = store
+            .worktrees
+            .iter()
+            .filter(|w| w.project_id == project.id)
+            .map(|w| PathBuf::from(&w.path))
+            .collect();
+        return Ok((project, wts));
+    }
+    if let Some(wt) = store
+        .worktrees
+        .iter()
+        .find(|w| same_path(Path::new(&w.path), &p))
+    {
+        let project = store
+            .projects
+            .iter()
+            .find(|proj| proj.id == wt.project_id)
+            .ok_or_else(|| "找不到该项目".to_string())?;
+        let wts = store
+            .worktrees
+            .iter()
+            .filter(|w| w.project_id == project.id)
+            .map(|w| PathBuf::from(&w.path))
+            .collect();
+        return Ok((project, wts));
+    }
+    Err("路径不属于任何已登记项目".into())
+}
+
+fn map_probe_status(status: ProbeStatus) -> DepLinkStatus {
+    match status {
+        ProbeStatus::None => DepLinkStatus::None,
+        ProbeStatus::Linked => DepLinkStatus::Linked,
+        ProbeStatus::Broken => DepLinkStatus::Broken,
+    }
+}
+
+fn map_link_error(err: LinkError) -> String {
+    match err {
+        LinkError::OutsideProject => "不在同一项目内".into(),
+        LinkError::SourceMissing => "源没有 node_modules".into(),
+        LinkError::SourceNotDir => "源 node_modules 不是目录".into(),
+        LinkError::NotASymlink => "目标不是软链，无法取消链接".into(),
+        LinkError::Io(msg) => msg,
+        LinkError::NeedsConfirm { .. } => unreachable!("NeedsConfirm handled by caller"),
+    }
+}
+
+fn status_item_for_root(root: &Path) -> DepLinkStatusItem {
+    let probe = dep_link::probe_target(root);
+    DepLinkStatusItem {
+        path: root.to_string_lossy().into_owned(),
+        status: map_probe_status(probe.status),
+        linked_from: probe
+            .linked_from
+            .map(|p| p.to_string_lossy().into_owned()),
+        source_ok: dep_link::source_node_modules_ok(root),
+    }
+}
+
+#[tauri::command]
+pub fn link_worktree_node_modules(
+    state: State<AppState>,
+    target_path: String,
+    source_path: String,
+    force: bool,
+) -> Result<LinkNodeModulesResult, String> {
+    let store = locked_store(&state)?;
+    let (project, worktree_paths) = project_context_for_path(&store, &target_path)?;
+    let main_root = PathBuf::from(&project.root_path);
+    match dep_link::link_node_modules(
+        Path::new(&target_path),
+        Path::new(&source_path),
+        &main_root,
+        &worktree_paths,
+        force,
+    ) {
+        Ok(()) => Ok(LinkNodeModulesResult::Ok {
+            snapshot: store.snapshot(),
+        }),
+        Err(LinkError::NeedsConfirm { is_symlink }) => Ok(LinkNodeModulesResult::NeedsConfirm {
+            conflict: if is_symlink {
+                "symlink".into()
+            } else {
+                "directory".into()
+            },
+        }),
+        Err(err) => Err(map_link_error(err)),
+    }
+}
+
+#[tauri::command]
+pub fn unlink_worktree_node_modules(
+    state: State<AppState>,
+    target_path: String,
+) -> Result<AppSnapshot, String> {
+    let store = locked_store(&state)?;
+    let _ = project_context_for_path(&store, &target_path)?;
+    dep_link::unlink_node_modules(Path::new(&target_path)).map_err(map_link_error)?;
+    Ok(store.snapshot())
+}
+
+#[tauri::command]
+pub fn get_worktree_dep_link_status(
+    state: State<AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<DepLinkStatusItem>, String> {
+    let _store = locked_store(&state)?;
+    Ok(paths
+        .iter()
+        .map(|p| status_item_for_root(Path::new(p)))
+        .collect())
+}
+
+#[tauri::command]
+pub fn list_node_modules_link_sources(
+    state: State<AppState>,
+    project_id: String,
+    exclude_path: Option<String>,
+) -> Result<Vec<DepLinkStatusItem>, String> {
+    let store = locked_store(&state)?;
+    let project = store
+        .projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "找不到该项目".to_string())?;
+    let mut candidates: Vec<PathBuf> = vec![PathBuf::from(&project.root_path)];
+    for wt in store.worktrees.iter().filter(|w| w.project_id == project_id) {
+        let path = PathBuf::from(&wt.path);
+        if !candidates.iter().any(|c| same_path(c, &path)) {
+            candidates.push(path);
+        }
+    }
+    let exclude = exclude_path.as_deref().map(Path::new);
+    Ok(candidates
+        .into_iter()
+        .filter(|path| {
+            if let Some(ex) = exclude {
+                if same_path(path, ex) {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|path| status_item_for_root(&path))
+        .filter(|item| item.source_ok)
+        .collect())
 }
 
 pub fn init_state(app: &AppHandle) -> Result<(), String> {

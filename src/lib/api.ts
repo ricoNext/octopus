@@ -4,7 +4,9 @@ import type {
   AppSnapshot,
   BranchOptions,
   DeleteResult,
+  DepLinkStatusItem,
   InspectResult,
+  LinkNodeModulesResult,
   MutationResult,
   RefreshProjectWorktreesResult,
   RemoveProjectResult,
@@ -92,5 +94,20 @@ export const api = {
         processName?: string | null;
       }>
     >("list_agent_presence"),
+  linkWorktreeNodeModules: (targetPath: string, sourcePath: string, force: boolean) =>
+    invoke<LinkNodeModulesResult>("link_worktree_node_modules", {
+      targetPath,
+      sourcePath,
+      force,
+    }),
+  unlinkWorktreeNodeModules: (targetPath: string) =>
+    invoke<AppSnapshot>("unlink_worktree_node_modules", { targetPath }),
+  getWorktreeDepLinkStatus: (paths: string[]) =>
+    invoke<DepLinkStatusItem[]>("get_worktree_dep_link_status", { paths }),
+  listNodeModulesLinkSources: (projectId: string, excludePath: string | null) =>
+    invoke<DepLinkStatusItem[]>("list_node_modules_link_sources", {
+      projectId,
+      excludePath,
+    }),
 };
 

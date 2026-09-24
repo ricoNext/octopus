@@ -72,3 +72,24 @@ export type Selection =
   | { kind: "empty" }
   | { kind: "main"; projectId: string }
   | { kind: "worktree"; worktreeId: string };
+
+export type DepLinkStatus = "none" | "linked" | "broken";
+
+export type DepLink = {
+  kind: "node_modules";
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+  linkedAt?: string | null;
+};
+
+export type LinkNodeModulesResult =
+  | { status: "ok"; snapshot: AppSnapshot }
+  | { status: "needsConfirm"; conflict: "directory" | "symlink" | string };
+
+export type DepLinkStatusItem = {
+  path: string;
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+  sourceOk: boolean;
+};
+

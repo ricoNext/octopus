@@ -113,3 +113,45 @@ pub struct RefreshProjectWorktreesResult {
     pub imported: Vec<String>,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DepLinkStatus {
+    None,
+    Linked,
+    Broken,
+}
+
+impl Default for DepLinkStatus {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLink {
+    pub kind: String, // always "node_modules" in Phase 1
+    pub status: DepLinkStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum LinkNodeModulesResult {
+    Ok { snapshot: AppSnapshot },
+    NeedsConfirm { conflict: String }, // "directory" | "symlink"
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLinkStatusItem {
+    pub path: String,
+    pub status: DepLinkStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+    pub source_ok: bool, // `{path}/node_modules` usable as link source
+}
