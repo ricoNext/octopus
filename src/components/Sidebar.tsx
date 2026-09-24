@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   FolderOpenIcon,
   GitBranchIcon,
+  LinkIcon,
   MoreHorizontalIcon,
   PanelLeftCloseIcon,
   PlusIcon,
@@ -10,6 +11,7 @@ import {
   SquareTerminalIcon,
   RefreshCwIcon,
   Trash2Icon,
+  UnlinkIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
@@ -665,6 +667,22 @@ export function Sidebar({
                               <span className="min-w-0">
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{worktree.branchName}</span>
+                                  {worktree.depLink?.status === "linked" ? (
+                                    <span title="node_modules 已链接" className="inline-flex shrink-0">
+                                      <LinkIcon
+                                        className="size-3.5 text-muted-foreground"
+                                        aria-label="node_modules 已链接"
+                                      />
+                                    </span>
+                                  ) : null}
+                                  {worktree.depLink?.status === "broken" ? (
+                                    <span title="node_modules 链接已损坏" className="inline-flex shrink-0">
+                                      <UnlinkIcon
+                                        className="size-3.5 text-amber-500"
+                                        aria-label="node_modules 链接已损坏"
+                                      />
+                                    </span>
+                                  ) : null}
                                   <BranchTag>worktree</BranchTag>
                                 </span>
                                 <span className="block truncate text-xs text-muted-foreground">
