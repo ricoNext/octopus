@@ -29,8 +29,30 @@ pub enum LinkError {
     SourceMissing,
     SourceNotDir,
     NeedsConfirm { is_symlink: bool },
+    /// Batch-only: force=false and N selected paths already exist
+    NeedsConfirmBatch { conflict_count: usize },
+    InvalidRelPath,
+    TargetParentMissing,
     Io(String),
     NotASymlink,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchUnlinkNotice {
+    pub rel_path: String,
+    pub kind: BatchUnlinkNoticeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchUnlinkNoticeKind {
+    NotASymlink,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchUnlinkResult {
+    pub unlinked: Vec<String>,
+    pub notices: Vec<BatchUnlinkNotice>,
 }
 
 pub fn project_roots<'a>(main_root: &'a Path, worktree_paths: &'a [PathBuf]) -> Vec<&'a Path> {
@@ -58,16 +80,6 @@ pub fn ensure_same_project(
         }
     }
     Err(LinkError::OutsideProject)
-}
-
-pub fn source_node_modules_ok(source_root: &Path) -> bool {
-    let nm = source_root.join("node_modules");
-    let meta = fs::symlink_metadata(&nm);
-    let Ok(meta) = meta else { return false };
-    if meta.file_type().is_symlink() {
-        return fs::metadata(&nm).map(|m| m.is_dir()).unwrap_or(false);
-    }
-    meta.is_dir()
 }
 
 pub const SCAN_MAX_DEPTH: u32 = 6;
@@ -162,8 +174,51 @@ pub fn scan_package_node_modules(source_root: &Path) -> ScanResult {
     }
 }
 
-pub fn probe_target(target_root: &Path) -> ProbeResult {
-    let nm = target_root.join("node_modules");
+/// Normalize user/scan relPath: trim, "." → "", reject empty segments and any ".." .
+pub fn normalize_rel_path(rel: &str) -> Result<String, LinkError> {
+    let rel = rel.trim().trim_matches('/');
+    if rel.is_empty() || rel == "." {
+        return Ok(String::new());
+    }
+    let mut parts = Vec::new();
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return Err(LinkError::InvalidRelPath);
+        }
+        parts.push(part);
+    }
+    Ok(parts.join("/"))
+}
+
+pub fn package_dir(root: &Path, rel: &str) -> Result<PathBuf, LinkError> {
+    let rel = normalize_rel_path(rel)?;
+    if rel.is_empty() {
+        Ok(root.to_path_buf())
+    } else {
+        Ok(root.join(rel))
+    }
+}
+
+pub fn source_node_modules_ok_at(source_root: &Path, rel: &str) -> bool {
+    let Ok(pkg) = package_dir(source_root, rel) else {
+        return false;
+    };
+    package_nm_is_dir(&pkg)
+}
+
+pub fn probe_target_at(target_root: &Path, rel: &str) -> ProbeResult {
+    let Ok(pkg) = package_dir(target_root, rel) else {
+        return ProbeResult {
+            status: ProbeStatus::None,
+            linked_from: None,
+        };
+    };
+    // linked_from = resolved.parent() of the nm path (package dir).
+    // Hydrate prefers stored linked_from (source root) over probe.
+    let nm = pkg.join("node_modules");
     let Ok(meta) = fs::symlink_metadata(&nm) else {
         return ProbeResult {
             status: ProbeStatus::None,
@@ -177,13 +232,10 @@ pub fn probe_target(target_root: &Path) -> ProbeResult {
         };
     }
     match fs::canonicalize(&nm) {
-        Ok(resolved) if resolved.is_dir() => {
-            let linked_from = resolved.parent().map(|p| p.to_path_buf());
-            ProbeResult {
-                status: ProbeStatus::Linked,
-                linked_from,
-            }
-        }
+        Ok(resolved) if resolved.is_dir() => ProbeResult {
+            status: ProbeStatus::Linked,
+            linked_from: resolved.parent().map(|p| p.to_path_buf()),
+        },
         _ => ProbeResult {
             status: ProbeStatus::Broken,
             linked_from: None,
@@ -191,9 +243,12 @@ pub fn probe_target(target_root: &Path) -> ProbeResult {
     }
 }
 
-pub fn link_node_modules(
+/// Symlink `{target}/{rel}/node_modules` → absolute `{source}/{rel}/node_modules`.
+/// If `{target}/{rel}` missing → `TargetParentMissing` (do NOT mkdir).
+pub fn link_node_modules_at(
     target_root: &Path,
     source_root: &Path,
+    rel_path: &str,
     main_root: &Path,
     worktree_paths: &[PathBuf],
     force: bool,
@@ -203,15 +258,21 @@ pub fn link_node_modules(
     if same_path(&target_root, &source_root) {
         return Err(LinkError::Io("不能链接到自身".into()));
     }
-    let source_nm = source_root.join("node_modules");
+    let rel = normalize_rel_path(rel_path)?;
+    let source_pkg = package_dir(&source_root, &rel)?;
+    let target_pkg = package_dir(&target_root, &rel)?;
+    if !target_pkg.is_dir() {
+        return Err(LinkError::TargetParentMissing);
+    }
+    let source_nm = source_pkg.join("node_modules");
     if !source_nm.exists() {
         return Err(LinkError::SourceMissing);
     }
-    if !source_node_modules_ok(&source_root) {
+    if !source_node_modules_ok_at(&source_root, &rel) {
         return Err(LinkError::SourceNotDir);
     }
     let source_nm_abs = canonicalize_or(&source_nm);
-    let target_nm = target_root.join("node_modules");
+    let target_nm = target_pkg.join("node_modules");
     if target_nm.exists() || fs::symlink_metadata(&target_nm).is_ok() {
         let is_symlink = fs::symlink_metadata(&target_nm)
             .map(|m| m.file_type().is_symlink())
@@ -228,14 +289,114 @@ pub fn link_node_modules(
     symlink(&source_nm_abs, &target_nm).map_err(|e| LinkError::Io(e.to_string()))
 }
 
-pub fn unlink_node_modules(target_root: &Path) -> Result<(), LinkError> {
-    let target_nm = target_root.join("node_modules");
+pub fn unlink_node_modules_at(target_root: &Path, rel_path: &str) -> Result<(), LinkError> {
+    let pkg = package_dir(target_root, rel_path)?;
+    let target_nm = pkg.join("node_modules");
     let meta = fs::symlink_metadata(&target_nm).map_err(|_| LinkError::NotASymlink)?;
     if !meta.file_type().is_symlink() {
         return Err(LinkError::NotASymlink);
     }
     fs::remove_file(&target_nm).map_err(|e| LinkError::Io(e.to_string()))
 }
+
+/// force=false: count conflicts across rel_paths first; if >0 return NeedsConfirmBatch.
+/// force=true: link each with force. Stop on first hard error.
+pub fn link_node_modules_batch(
+    target_root: &Path,
+    source_root: &Path,
+    rel_paths: &[String],
+    main_root: &Path,
+    worktree_paths: &[PathBuf],
+    force: bool,
+) -> Result<(), LinkError> {
+    let mut normalized = Vec::new();
+    for rel in rel_paths {
+        normalized.push(normalize_rel_path(rel)?);
+    }
+    if !force {
+        let mut conflict_count = 0usize;
+        for rel in &normalized {
+            let target_pkg = package_dir(target_root, rel)?;
+            let target_nm = target_pkg.join("node_modules");
+            if target_nm.exists() || fs::symlink_metadata(&target_nm).is_ok() {
+                conflict_count += 1;
+            }
+        }
+        if conflict_count > 0 {
+            return Err(LinkError::NeedsConfirmBatch { conflict_count });
+        }
+    }
+    for rel in &normalized {
+        link_node_modules_at(
+            target_root,
+            source_root,
+            rel,
+            main_root,
+            worktree_paths,
+            force,
+        )?;
+    }
+    Ok(())
+}
+
+pub fn unlink_node_modules_batch(target_root: &Path, rel_paths: &[String]) -> BatchUnlinkResult {
+    let mut unlinked = Vec::new();
+    let mut notices = Vec::new();
+    for rel in rel_paths {
+        let Ok(norm) = normalize_rel_path(rel) else {
+            notices.push(BatchUnlinkNotice {
+                rel_path: rel.clone(),
+                kind: BatchUnlinkNoticeKind::Missing,
+            });
+            continue;
+        };
+        match unlink_node_modules_at(target_root, &norm) {
+            Ok(()) => unlinked.push(norm),
+            Err(LinkError::NotASymlink) => {
+                let pkg = package_dir(target_root, &norm).ok();
+                let nm = pkg.map(|p| p.join("node_modules"));
+                let exists = nm.as_ref().map(|p| p.exists()).unwrap_or(false);
+                notices.push(BatchUnlinkNotice {
+                    rel_path: norm,
+                    kind: if exists {
+                        BatchUnlinkNoticeKind::NotASymlink
+                    } else {
+                        BatchUnlinkNoticeKind::Missing
+                    },
+                });
+            }
+            Err(_) => notices.push(BatchUnlinkNotice {
+                rel_path: norm,
+                kind: BatchUnlinkNoticeKind::Missing,
+            }),
+        }
+    }
+    BatchUnlinkResult { unlinked, notices }
+}
+
+// Phase 1 wrappers:
+pub fn link_node_modules(
+    target_root: &Path,
+    source_root: &Path,
+    main_root: &Path,
+    worktree_paths: &[PathBuf],
+    force: bool,
+) -> Result<(), LinkError> {
+    link_node_modules_at(target_root, source_root, "", main_root, worktree_paths, force)
+}
+
+pub fn unlink_node_modules(target_root: &Path) -> Result<(), LinkError> {
+    unlink_node_modules_at(target_root, "")
+}
+
+pub fn probe_target(target_root: &Path) -> ProbeResult {
+    probe_target_at(target_root, "")
+}
+
+pub fn source_node_modules_ok(source_root: &Path) -> bool {
+    source_node_modules_ok_at(source_root, "")
+}
+
 
 
 use crate::models::{DepLink, DepLinkEntry, DepLinkStatus};
@@ -504,5 +665,92 @@ mod tests {
         assert_eq!(dep.links[0].status, DepLinkStatus::Linked);
         assert_eq!(dep.links[0].linked_from.as_deref(), Some("/repo"));
         assert!(!migrate_dep_link_links(&mut dep)); // idempotent
+    }
+
+    #[test]
+    fn normalize_rel_path_rejects_dotdot() {
+        assert!(matches!(
+            normalize_rel_path("../x"),
+            Err(LinkError::InvalidRelPath)
+        ));
+        assert_eq!(normalize_rel_path(".").unwrap(), "");
+        assert_eq!(normalize_rel_path("packages/foo").unwrap(), "packages/foo");
+    }
+
+    #[test]
+    fn link_at_package_rel_path_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(main.join("packages/foo")).unwrap();
+        fs::create_dir_all(main.join("packages/foo/node_modules")).unwrap();
+        fs::create_dir_all(wt.join("packages/foo")).unwrap();
+        link_node_modules_at(
+            &wt,
+            &main,
+            "packages/foo",
+            &main,
+            &[wt.clone()],
+            false,
+        )
+        .unwrap();
+        let target = wt.join("packages/foo/node_modules");
+        assert!(target.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(fs::read_link(&target).unwrap().is_absolute());
+    }
+
+    #[test]
+    fn link_at_missing_parent_errors_without_mkdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(main.join("packages/foo/node_modules")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        // wt/packages/foo does NOT exist
+        let err = link_node_modules_at(
+            &wt,
+            &main,
+            "packages/foo",
+            &main,
+            &[wt.clone()],
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, LinkError::TargetParentMissing));
+        assert!(!wt.join("packages/foo").exists());
+    }
+
+    #[test]
+    fn batch_needs_confirm_with_conflict_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(main.join("node_modules")).unwrap();
+        fs::create_dir_all(wt.join("node_modules")).unwrap(); // real dir conflict at root
+        fs::create_dir_all(main.join("packages/foo/node_modules")).unwrap();
+        fs::create_dir_all(wt.join("packages/foo/node_modules")).unwrap(); // real dir conflict
+        let rels = vec!["".to_string(), "packages/foo".to_string()];
+        let err = link_node_modules_batch(&wt, &main, &rels, &main, &[wt.clone()], false).unwrap_err();
+        assert!(matches!(err, LinkError::NeedsConfirmBatch { conflict_count: 2 }));
+    }
+
+    #[test]
+    fn batch_unlink_skips_real_dir_with_notice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(main.join("node_modules")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        link_node_modules_at(&wt, &main, "", &main, &[wt.clone()], false).unwrap();
+        fs::create_dir_all(wt.join("packages/foo/node_modules")).unwrap(); // real dir
+        let result = unlink_node_modules_batch(
+            &wt,
+            &["".to_string(), "packages/foo".to_string()],
+        );
+        assert_eq!(result.unlinked, vec!["".to_string()]);
+        assert!(result.notices.iter().any(|n| {
+            n.rel_path == "packages/foo" && n.kind == BatchUnlinkNoticeKind::NotASymlink
+        }));
+        assert!(wt.join("packages/foo/node_modules").is_dir());
     }
 }

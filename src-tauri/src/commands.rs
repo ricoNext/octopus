@@ -388,9 +388,14 @@ fn map_link_error(err: LinkError) -> String {
         LinkError::OutsideProject => "不在同一项目内".into(),
         LinkError::SourceMissing => "源没有 node_modules".into(),
         LinkError::SourceNotDir => "源 node_modules 不是目录".into(),
+        LinkError::InvalidRelPath => "非法相对路径".into(),
+        LinkError::TargetParentMissing => "目标 package 目录不存在".into(),
         LinkError::NotASymlink => "目标不是软链，无法取消链接".into(),
         LinkError::Io(msg) => msg,
         LinkError::NeedsConfirm { .. } => unreachable!("NeedsConfirm handled by caller"),
+        LinkError::NeedsConfirmBatch { .. } => {
+            unreachable!("NeedsConfirmBatch handled by caller")
+        }
     }
 }
 
