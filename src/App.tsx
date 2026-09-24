@@ -118,15 +118,37 @@ type LinkPickerState = {
   mode: "link" | "relink";
   sources: DepLinkStatusItem[];
   selectedSource: string;
+  availableRelPaths: string[];
+  selectedRelPaths: string[];
+  truncated: boolean;
 } | null;
 
 type OverwriteState = {
   targetPath: string;
   sourcePath: string;
-  conflict: "directory" | "symlink" | string;
+  relPaths: string[];
+  conflictCount: number;
+  conflict?: string | null;
 } | null;
 
 type UnlinkConfirmState = Worktree | null;
+
+function recordedRelPathsForPicker(worktree: Worktree): string[] {
+  const links = worktree.depLink?.links;
+  if (links && links.length > 0) {
+    return links.map((entry) => entry.relPath);
+  }
+  // Phase 1 top-level linked/broken without links[] — treat as root.
+  if (
+    worktree.depLink &&
+    (worktree.depLink.status === "linked" ||
+      worktree.depLink.status === "broken" ||
+      worktree.depLink.linkedFrom)
+  ) {
+    return [""];
+  }
+  return [];
+}
 
 type PersistedTerminalState = {
   version?: number;
@@ -1393,12 +1415,55 @@ export default function App() {
         basedOn && sources.some((item) => item.path === basedOn)
           ? basedOn
           : sources[0].path;
+      const scan = await api.scanWorktreeNodeModules(selectedSource);
+      if (scan.truncated) {
+        toast.message("已截断，仅显示前 50 个");
+      }
+      const recorded = recordedRelPathsForPicker(worktree);
+      const selectedRelPaths = defaultSelectedRelPaths({
+        mode,
+        available: scan.relPaths,
+        recorded,
+      });
       const next = {
         target: worktree,
         mode,
         sources,
         selectedSource,
+        availableRelPaths: scan.relPaths,
+        selectedRelPaths,
+        truncated: scan.truncated,
       } as Exclude<LinkPickerState, null>;
+      linkPickerRef.current = next;
+      setLinkPicker(next);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function selectLinkPickerSource(sourcePath: string) {
+    const current = linkPickerRef.current;
+    if (!current || current.selectedSource === sourcePath) {
+      return;
+    }
+    try {
+      const scan = await api.scanWorktreeNodeModules(sourcePath);
+      if (scan.truncated) {
+        toast.message("已截断，仅显示前 50 个");
+      }
+      const recorded = recordedRelPathsForPicker(current.target);
+      const selectedRelPaths = defaultSelectedRelPaths({
+        mode: current.mode,
+        available: scan.relPaths,
+        recorded,
+      });
+      const next = {
+        ...current,
+        selectedSource: sourcePath,
+        availableRelPaths: scan.relPaths,
+        selectedRelPaths,
+        truncated: scan.truncated,
+      };
       linkPickerRef.current = next;
       setLinkPicker(next);
     } catch (error) {
@@ -1411,18 +1476,26 @@ export default function App() {
     const overwrite = overwriteConfirmRef.current;
     const targetPath = force ? overwrite?.targetPath : picker?.target.path;
     const sourcePath = force ? overwrite?.sourcePath : picker?.selectedSource;
-    if (!targetPath || !sourcePath) {
+    const relPaths = force
+      ? (overwrite?.relPaths ?? [])
+      : (picker?.selectedRelPaths ?? []);
+    if (!targetPath || !sourcePath || relPaths.length === 0) {
       return;
     }
     try {
-      const result = await api.linkWorktreeNodeModules(targetPath, sourcePath, force);
+      const result = await api.linkWorktreeNodeModulesBatch(
+        targetPath,
+        sourcePath,
+        relPaths,
+        force,
+      );
       if (result.status === "needsConfirm") {
-        // Temporary until Task 6 N-copy; keep Phase 1 conflict string for dialog.
-        const n = result.conflictCount ?? (result.conflict ? 1 : 0);
         const next = {
           targetPath,
           sourcePath,
-          conflict: result.conflict ?? (n > 0 ? "directory" : ""),
+          relPaths: picker?.selectedRelPaths ?? overwrite?.relPaths ?? relPaths,
+          conflictCount: result.conflictCount,
+          conflict: result.conflict,
         } as Exclude<OverwriteState, null>;
         overwriteConfirmRef.current = next;
         setOverwriteConfirm(next);
@@ -1446,17 +1519,15 @@ export default function App() {
       return;
     }
     try {
-      const next = await api.unlinkWorktreeNodeModules(target.path);
-      applySnapshot(next);
+      const result = await api.unlinkWorktreeNodeModulesBatch(target.path, null);
+      applySnapshot(result.snapshot);
+      for (const notice of result.notices) {
+        toast.message(notice);
+      }
       unlinkConfirmRef.current = null;
       setUnlinkConfirm(null);
     } catch (error) {
-      const message = invokeError(error);
-      if (message.includes("不是软链")) {
-        toast.error("本地安装，不是软链");
-      } else {
-        toast.error(message);
-      }
+      toast.error(invokeError(error));
       unlinkConfirmRef.current = null;
       setUnlinkConfirm(null);
     }
@@ -2124,6 +2195,7 @@ export default function App() {
         open={Boolean(linkPicker)}
         onOpenChange={(open) => {
           if (!open) {
+            linkPickerRef.current = null;
             setLinkPicker(null);
           }
         }}
@@ -2134,34 +2206,60 @@ export default function App() {
               {linkPicker?.mode === "relink" ? "重新链接 node_modules" : "链接 node_modules"}
             </DialogTitle>
             <DialogDescription>
-              选择同项目中已有 node_modules 的源。目标：
+              选择同项目中已有 node_modules 的源，并勾选要链接的路径。目标：
               {linkPicker ? ` ${linkPicker.target.branchName}` : ""}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-56 overflow-y-auto rounded-md border p-1">
-            {linkPicker?.sources.map((source) => (
-              <button
-                type="button"
-                key={source.path}
-                className={cn(
-                  "block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted",
-                  source.path === linkPicker.selectedSource && "bg-muted font-medium",
-                )}
-                onClick={() =>
-                  setLinkPicker((current) => {
-                    if (!current) {
-                      return current;
-                    }
-                    const next = { ...current, selectedSource: source.path };
-                    linkPickerRef.current = next;
-                    return next;
-                  })
-                }
-              >
-                <span className="block">{linkPickerSourceLabel(source.path)}</span>
-                <span className="block truncate text-xs text-muted-foreground">{source.path}</span>
-              </button>
-            ))}
+          <div className="grid gap-3">
+            <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+              {linkPicker?.sources.map((source) => (
+                <button
+                  type="button"
+                  key={source.path}
+                  className={cn(
+                    "block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted",
+                    source.path === linkPicker.selectedSource && "bg-muted font-medium",
+                  )}
+                  onClick={() => void selectLinkPickerSource(source.path)}
+                >
+                  <span className="block">{linkPickerSourceLabel(source.path)}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{source.path}</span>
+                </button>
+              ))}
+            </div>
+            {linkPicker && linkPicker.availableRelPaths.length > 0 ? (
+              <div className="max-h-40 overflow-y-auto rounded-md border p-2 grid gap-1">
+                <div className="text-xs text-muted-foreground mb-1">
+                  已选 {linkPicker.selectedRelPaths.length}/{linkPicker.availableRelPaths.length}
+                </div>
+                {linkPicker.availableRelPaths.map((rel) => (
+                  <label key={rel || "__root"} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={linkPicker.selectedRelPaths.includes(rel)}
+                      onCheckedChange={(value) => {
+                        setLinkPicker((current) => {
+                          if (!current) {
+                            return current;
+                          }
+                          const selectedRelPaths =
+                            value === true
+                              ? current.selectedRelPaths.includes(rel)
+                                ? current.selectedRelPaths
+                                : [...current.selectedRelPaths, rel]
+                              : current.selectedRelPaths.filter((item) => item !== rel);
+                          const next = { ...current, selectedRelPaths };
+                          linkPickerRef.current = next;
+                          return next;
+                        });
+                      }}
+                    />
+                    <span>{relPathLabel(rel)}</span>
+                  </label>
+                ))}
+              </div>
+            ) : linkPicker ? (
+              <p className="text-sm text-muted-foreground">所选源没有可链接的 node_modules</p>
+            ) : null}
           </div>
           <DialogFooter>
             <Button
@@ -2174,7 +2272,7 @@ export default function App() {
               取消
             </Button>
             <Button
-              disabled={!linkPicker?.selectedSource}
+              disabled={!linkPicker?.selectedSource || (linkPicker?.selectedRelPaths.length ?? 0) === 0}
               onClick={() => void confirmLinkFromPicker(false)}
             >
               链接
@@ -2187,6 +2285,7 @@ export default function App() {
         open={Boolean(overwriteConfirm)}
         onOpenChange={(open) => {
           if (!open) {
+            overwriteConfirmRef.current = null;
             setOverwriteConfirm(null);
           }
         }}
@@ -2195,11 +2294,7 @@ export default function App() {
           <AlertDialogHeader>
             <AlertDialogTitle>覆盖并链接 node_modules</AlertDialogTitle>
             <AlertDialogDescription>
-              {overwriteConfirm?.conflict === "directory"
-                ? "将删除现有真实 node_modules 目录，并链接到所选源。此操作不可从本应用撤销。"
-                : overwriteConfirm?.conflict === "symlink"
-                  ? "将替换现有 node_modules 软链。"
-                  : `目标已有 node_modules（${overwriteConfirm?.conflict ?? ""}），覆盖后将链接到所选源。`}
+              {`将覆盖 ${overwriteConfirm?.conflictCount ?? 0} 个已存在的 node_modules 路径（含真实目录或旧软链），并链接到所选源。此操作不可从本应用撤销。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2215,6 +2310,7 @@ export default function App() {
         open={Boolean(unlinkConfirm)}
         onOpenChange={(open) => {
           if (!open) {
+            unlinkConfirmRef.current = null;
             setUnlinkConfirm(null);
           }
         }}
@@ -2223,7 +2319,7 @@ export default function App() {
           <AlertDialogHeader>
             <AlertDialogTitle>取消链接</AlertDialogTitle>
             <AlertDialogDescription>
-              确定取消 node_modules 软链？不会自动安装依赖。
+              确定取消本工作树由本功能创建的全部 node_modules 软链？不会自动安装依赖。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
