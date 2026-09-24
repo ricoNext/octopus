@@ -5,6 +5,9 @@ export function resolveBasedOnPath(
   startFromBranch: string,
   worktrees: Worktree[],
 ): string {
+  if (project.mainBranch != null && startFromBranch === project.mainBranch) {
+    return project.rootPath;
+  }
   const match = worktrees.find(
     (wt) => wt.projectId === project.id && wt.branchName === startFromBranch,
   );
@@ -17,7 +20,7 @@ export function basedOnLabel(
   worktrees: Worktree[],
 ): string {
   if (basedOnPath === project.rootPath) {
-    return `${project.defaultBranch}（主仓）`;
+    return `${project.mainBranch ?? project.defaultBranch}（主仓）`;
   }
   const wt = worktrees.find((item) => item.path === basedOnPath);
   return wt?.branchName ?? basedOnPath;

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::git::{
     canonicalize_or, default_branch, existing_linked_worktrees, git, git_ok,
     local_branches, prefer_stderr, recent_branches, remote_branches, same_path, show_toplevel,
-    worktree_list,
+    worktree_list, ListedWorktree,
 };
 use crate::models::{
     DeleteResult, InspectResult, Project, RemoveProjectResult, Store, Worktree,
@@ -115,7 +115,24 @@ pub enum CreateOutcome {
 }
 
 
+/// True when `git worktree list` shows the main repo (root) checked out on `start_branch`.
+pub(crate) fn main_repo_lists_branch(
+    listed: &[ListedWorktree],
+    root: &Path,
+    start_branch: &str,
+) -> bool {
+    listed
+        .iter()
+        .any(|item| same_path(&item.path, root) && item.branch.as_deref() == Some(start_branch))
+}
+
 pub(crate) fn resolve_based_on_path(store: &Store, project: &Project, start_branch: &str) -> String {
+    let root = PathBuf::from(&project.root_path);
+    if let Ok(listed) = worktree_list(&root) {
+        if main_repo_lists_branch(&listed, &root, start_branch) {
+            return project.root_path.clone();
+        }
+    }
     store
         .worktrees
         .iter()
@@ -879,6 +896,7 @@ mod tests {
             based_on_path: None,
             dep_link: None,
         });
+        // No real repo at /p → worktree_list fails; fall through to store match / root.
         assert_eq!(
             resolve_based_on_path(&store, &project, "feat"),
             "/p-wt"
@@ -886,6 +904,86 @@ mod tests {
         assert_eq!(
             resolve_based_on_path(&store, &project, "main"),
             "/p"
+        );
+    }
+
+    #[test]
+    fn main_repo_lists_branch_matches_root_checkout() {
+        let root = PathBuf::from("/repo");
+        let listed = vec![
+            ListedWorktree {
+                path: PathBuf::from("/repo"),
+                head: "abc".into(),
+                branch: Some("feature-a".into()),
+            },
+            ListedWorktree {
+                path: PathBuf::from("/repo-worktrees/feat"),
+                head: "def".into(),
+                branch: Some("feat".into()),
+            },
+        ];
+        assert!(main_repo_lists_branch(&listed, &root, "feature-a"));
+        assert!(!main_repo_lists_branch(&listed, &root, "feat"));
+        assert!(!main_repo_lists_branch(&listed, &root, "main"));
+    }
+
+    #[test]
+    fn based_on_prefers_main_repo_current_branch_over_stale_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("acme");
+        init_repo(&repo);
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feature-a"])
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let mut store = Store::default();
+        let project = Project {
+            id: "proj-1".into(),
+            name: "acme".into(),
+            root_path: repo.to_string_lossy().into(),
+            default_branch: "main".into(),
+        };
+        store.projects.push(project.clone());
+        // Stale store entry claiming the same branch as 主仓 checkout.
+        store.worktrees.push(Worktree {
+            id: "wt-stale".into(),
+            project_id: "proj-1".into(),
+            display_name: "feature-a".into(),
+            branch_name: "feature-a".into(),
+            start_from: None,
+            path: tmp.path().join("stale-wt").to_string_lossy().into(),
+            origin: WorktreeOrigin::App,
+            status: WorktreeStatus::Ready,
+            error_message: None,
+            based_on_path: None,
+            dep_link: None,
+        });
+        store.worktrees.push(Worktree {
+            id: "wt-feat".into(),
+            project_id: "proj-1".into(),
+            display_name: "feat".into(),
+            branch_name: "feat".into(),
+            start_from: None,
+            path: tmp.path().join("feat-wt").to_string_lossy().into(),
+            origin: WorktreeOrigin::App,
+            status: WorktreeStatus::Ready,
+            error_message: None,
+            based_on_path: None,
+            dep_link: None,
+        });
+
+        assert_eq!(
+            resolve_based_on_path(&store, &project, "feature-a"),
+            project.root_path
+        );
+        assert_eq!(
+            resolve_based_on_path(&store, &project, "feat"),
+            store.worktrees[1].path
         );
     }
 
