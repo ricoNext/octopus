@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { CopyableError } from "@/components/CopyableError";
 import { RightPanel } from "@/components/RightPanel";
 import { Sidebar } from "@/components/Sidebar";
+import { FilePreview } from "@/components/FilePreview";
 import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import {
@@ -164,6 +165,10 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const RIGHT_RAIL_WIDTH_KEY = "octopus.right-rail.width";
 const DEFAULT_RIGHT_RAIL_WIDTH = 280;
+const CENTER_PREVIEW_WIDTH_KEY = "octopus.center-preview.width";
+const DEFAULT_CENTER_PREVIEW_WIDTH = 420;
+const MIN_CENTER_PREVIEW_WIDTH = 240;
+const MAX_CENTER_PREVIEW_WIDTH = 900;
 const THEME_KEY = "octopus.theme";
 const DEFAULT_EDITOR_KEY = "octopus.default-editor";
 type ThemePreference = "light" | "dark" | "system";
@@ -242,6 +247,23 @@ function readRightRailWidth(): number {
     return DEFAULT_RIGHT_RAIL_WIDTH;
   }
 }
+
+function readCenterPreviewWidth(): number {
+  try {
+    const value = Number(localStorage.getItem(CENTER_PREVIEW_WIDTH_KEY));
+    return Number.isFinite(value)
+      ? Math.min(MAX_CENTER_PREVIEW_WIDTH, Math.max(MIN_CENTER_PREVIEW_WIDTH, value))
+      : DEFAULT_CENTER_PREVIEW_WIDTH;
+  } catch {
+    return DEFAULT_CENTER_PREVIEW_WIDTH;
+  }
+}
+
+type FilePreviewState = {
+  rootPath: string;
+  relPath: string;
+  content: string;
+} | null;
 
 function readPersistedTerminalState(): PersistedTerminalState {
   try {
@@ -326,6 +348,12 @@ export default function App() {
   const [rightRailCollapsed, setRightRailCollapsed] = useState(false);
   const rightRailShellRef = useRef<HTMLDivElement | null>(null);
   const rightRailResizePointerRef = useRef<{ pointerId: number } | null>(null);
+  const [filePreview, setFilePreview] = useState<FilePreviewState>(null);
+  const [centerPreviewWidth, setCenterPreviewWidth] = useState(readCenterPreviewWidth);
+  const [isResizingCenterPreview, setIsResizingCenterPreview] = useState(false);
+  const centerSplitRef = useRef<HTMLDivElement | null>(null);
+  const centerPreviewShellRef = useRef<HTMLDivElement | null>(null);
+  const centerPreviewResizePointerRef = useRef<{ pointerId: number } | null>(null);
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
@@ -414,14 +442,22 @@ export default function App() {
   }, [rightRailWidth]);
 
   useEffect(() => {
-    const resizing = isResizingSidebar || isResizingRightRail;
+    try {
+      localStorage.setItem(CENTER_PREVIEW_WIDTH_KEY, String(centerPreviewWidth));
+    } catch {
+      // 本地存储不可用时，宽度仍可在当前会话中正常调整。
+    }
+  }, [centerPreviewWidth]);
+
+  useEffect(() => {
+    const resizing = isResizingSidebar || isResizingRightRail || isResizingCenterPreview;
     document.body.style.cursor = resizing ? "col-resize" : "";
     document.body.style.userSelect = resizing ? "none" : "";
     return () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizingSidebar, isResizingRightRail]);
+  }, [isResizingSidebar, isResizingRightRail, isResizingCenterPreview]);
 
   const projects = snapshot.projects;
   const worktrees = snapshot.worktrees;
@@ -526,6 +562,27 @@ export default function App() {
       : selection.kind === "worktree"
         ? selectedWorktree?.path ?? null
         : null;
+
+  useEffect(() => {
+    setFilePreview(null);
+  }, [selectedContextId, filesRootPath]);
+
+  const handleOpenFilePreview = useCallback(
+    async (args: { rootPath: string; relPath: string }) => {
+      try {
+        const content = await api.fsReadTextFile(args.rootPath, args.relPath);
+        setFilePreview({
+          rootPath: args.rootPath,
+          relPath: args.relPath,
+          content,
+        });
+      } catch (error) {
+        toast.error(invokeError(error));
+      }
+    },
+    [],
+  );
+
   const selectedTabs = selectedContextId ? tabsByContext[selectedContextId] ?? [] : [];
   const activeTabId = selectedContextId
     ? activeTabByContext[selectedContextId] ?? selectedTabs[0]?.id
@@ -1871,7 +1928,8 @@ export default function App() {
             </DropdownMenuContent>
           </DropdownMenu>
             </div>
-            <div className="relative min-h-0 flex-1">
+            <div ref={centerSplitRef} className="relative flex min-h-0 flex-1">
+              <div className="relative min-h-0 min-w-0 flex-1">
           {terminalContexts.flatMap((context) =>
             (tabsByContext[context.id] ?? []).flatMap((tab) => {
               if (!warmMountKeys.has(warmMountKey(context.id, tab.id))) {
@@ -1926,6 +1984,93 @@ export default function App() {
               />
             </div>
           ) : null}
+              </div>
+              {filePreview ? (
+                <>
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整预览宽度"
+                    aria-valuenow={centerPreviewWidth}
+                    tabIndex={0}
+                    className={cn(
+                      "group relative z-20 flex h-full w-3 shrink-0 touch-none cursor-col-resize items-stretch justify-center outline-none",
+                      isResizingCenterPreview && "cursor-col-resize",
+                    )}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      centerPreviewResizePointerRef.current = { pointerId: event.pointerId };
+                      setIsResizingCenterPreview(true);
+                    }}
+                    onPointerMove={(event) => {
+                      if (centerPreviewResizePointerRef.current?.pointerId !== event.pointerId) {
+                        return;
+                      }
+                      const splitRect = centerSplitRef.current?.getBoundingClientRect();
+                      if (!splitRect) {
+                        return;
+                      }
+                      const nextWidth = Math.min(
+                        MAX_CENTER_PREVIEW_WIDTH,
+                        Math.max(MIN_CENTER_PREVIEW_WIDTH, Math.round(splitRect.right - event.clientX)),
+                      );
+                      if (centerPreviewShellRef.current) {
+                        centerPreviewShellRef.current.style.width = `${nextWidth}px`;
+                      }
+                    }}
+                    onPointerUp={(event) => {
+                      if (centerPreviewResizePointerRef.current?.pointerId !== event.pointerId) {
+                        return;
+                      }
+                      const nextWidth =
+                        centerPreviewShellRef.current?.getBoundingClientRect().width ??
+                        centerPreviewWidth;
+                      centerPreviewResizePointerRef.current = null;
+                      setIsResizingCenterPreview(false);
+                      setCenterPreviewWidth(
+                        Math.min(
+                          MAX_CENTER_PREVIEW_WIDTH,
+                          Math.max(MIN_CENTER_PREVIEW_WIDTH, Math.round(nextWidth)),
+                        ),
+                      );
+                      event.currentTarget.releasePointerCapture(event.pointerId);
+                    }}
+                    onPointerCancel={() => {
+                      centerPreviewResizePointerRef.current = null;
+                      setIsResizingCenterPreview(false);
+                    }}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 32 : 16;
+                      if (event.key === "ArrowLeft") {
+                        event.preventDefault();
+                        setCenterPreviewWidth((current) =>
+                          Math.min(MAX_CENTER_PREVIEW_WIDTH, current + step),
+                        );
+                      } else if (event.key === "ArrowRight") {
+                        event.preventDefault();
+                        setCenterPreviewWidth((current) =>
+                          Math.max(MIN_CENTER_PREVIEW_WIDTH, current - step),
+                        );
+                      }
+                    }}
+                  >
+                    <span className="h-full w-px bg-border/80 transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary/70" />
+                  </div>
+                  <div
+                    ref={centerPreviewShellRef}
+                    className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l"
+                    style={{ width: centerPreviewWidth }}
+                  >
+                    <FilePreview
+                      rootPath={filePreview.rootPath}
+                      relPath={filePreview.relPath}
+                      content={filePreview.content}
+                      onClose={() => setFilePreview(null)}
+                    />
+                  </div>
+                </>
+              ) : null}
             </div>
           </>
         )}
@@ -2014,6 +2159,7 @@ export default function App() {
                 agentRows={agentRows}
                 onFocusAgent={focusAgentSession}
                 filesRootPath={filesRootPath}
+                onOpenFilePreview={handleOpenFilePreview}
               />
             </>
           )}
