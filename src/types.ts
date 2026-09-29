@@ -21,6 +21,8 @@ export type Worktree = {
   status: WorktreeStatus;
   errorMessage?: string | null;
   missing: boolean;
+  basedOnPath?: string | null;
+  depLink?: DepLink | null;
 };
 
 export type AppSnapshot = {
@@ -72,3 +74,45 @@ export type Selection =
   | { kind: "empty" }
   | { kind: "main"; projectId: string }
   | { kind: "worktree"; worktreeId: string };
+
+export type DepLinkStatus = "none" | "linked" | "broken";
+
+export type DepLinkEntry = {
+  relPath: string;
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+};
+
+export type DepLink = {
+  kind: "node_modules";
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+  linkedAt?: string | null;
+  links?: DepLinkEntry[];
+};
+
+export type LinkNodeModulesResult =
+  | { status: "ok"; snapshot: AppSnapshot }
+  | {
+      status: "needsConfirm";
+      conflict?: "directory" | "symlink" | string | null;
+      conflictCount: number;
+    };
+
+export type ScanNodeModulesResult = {
+  relPaths: string[];
+  truncated: boolean;
+};
+
+export type UnlinkNodeModulesBatchResult = {
+  snapshot: AppSnapshot;
+  notices: string[];
+};
+
+export type DepLinkStatusItem = {
+  path: string;
+  status: DepLinkStatus;
+  linkedFrom?: string | null;
+  sourceOk: boolean;
+};
+

@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   FolderOpenIcon,
   GitBranchIcon,
+  LinkIcon,
   MoreHorizontalIcon,
   PanelLeftCloseIcon,
   PlusIcon,
@@ -10,6 +11,7 @@ import {
   SquareTerminalIcon,
   RefreshCwIcon,
   Trash2Icon,
+  UnlinkIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
@@ -28,7 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { invokeError } from "@/lib/api";
-import type { BranchOptions, Project, Selection, Worktree } from "@/types";
+import type { BranchOptions, DepLinkStatus, Project, Selection, Worktree } from "@/types";
 
 const COLLAPSED_KEY = "octopus.sidebar.collapsedProjectIds";
 
@@ -84,6 +86,9 @@ type SidebarProps = {
   onOpenEditor: (path: string) => void;
   editorConfigured: boolean;
   onRevealFinder: (path: string) => void;
+  onLinkNodeModules: (worktree: Worktree) => void;
+  onRelinkNodeModules: (worktree: Worktree) => void;
+  onUnlinkNodeModules: (worktree: Worktree) => void;
   settingsActive?: boolean;
   onOpenSettings: () => void;
   collapsed?: boolean;
@@ -186,6 +191,10 @@ type WorktreeMenuItemsProps = {
   onAbandonWorktree: (worktreeId: string) => void;
   onRemoveMissing: (worktreeId: string) => void;
   onDeleteWorktree: (worktreeId: string) => void;
+  depLinkStatus?: DepLinkStatus;
+  onLinkNodeModules: (worktree: Worktree) => void;
+  onRelinkNodeModules: (worktree: Worktree) => void;
+  onUnlinkNodeModules: (worktree: Worktree) => void;
 };
 
 function WorktreeMenuItems({
@@ -197,6 +206,10 @@ function WorktreeMenuItems({
   onAbandonWorktree,
   onRemoveMissing,
   onDeleteWorktree,
+  depLinkStatus = "none",
+  onLinkNodeModules,
+  onRelinkNodeModules,
+  onUnlinkNodeModules,
 }: WorktreeMenuItemsProps) {
   return (
     <>
@@ -220,6 +233,25 @@ function WorktreeMenuItems({
           <DropdownMenuItem onClick={() => onAbandonWorktree(worktree.id)}>
             放弃
           </DropdownMenuItem>
+        </>
+      ) : null}
+      {!worktree.missing && worktree.status === "ready" ? (
+        <>
+          {depLinkStatus === "linked" ? (
+            <DropdownMenuItem onClick={() => onRelinkNodeModules(worktree)}>
+              重新链接 node_modules…
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={() => onLinkNodeModules(worktree)}>
+              链接 node_modules…
+            </DropdownMenuItem>
+          )}
+          {depLinkStatus === "linked" || depLinkStatus === "broken" ? (
+            <DropdownMenuItem onClick={() => onUnlinkNodeModules(worktree)}>
+              取消链接
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
         </>
       ) : null}
       {worktree.missing ? (
@@ -255,6 +287,9 @@ export function Sidebar({
   onOpenEditor,
   editorConfigured,
   onRevealFinder,
+  onLinkNodeModules,
+  onRelinkNodeModules,
+  onUnlinkNodeModules,
   settingsActive = false,
   onOpenSettings,
   collapsed = false,
@@ -632,6 +667,22 @@ export function Sidebar({
                               <span className="min-w-0">
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{worktree.branchName}</span>
+                                  {worktree.depLink?.status === "linked" ? (
+                                    <span title="node_modules 已链接" className="inline-flex shrink-0">
+                                      <LinkIcon
+                                        className="size-3.5 text-muted-foreground"
+                                        aria-label="node_modules 已链接"
+                                      />
+                                    </span>
+                                  ) : null}
+                                  {worktree.depLink?.status === "broken" ? (
+                                    <span title="node_modules 链接已损坏" className="inline-flex shrink-0">
+                                      <UnlinkIcon
+                                        className="size-3.5 text-amber-500"
+                                        aria-label="node_modules 链接已损坏"
+                                      />
+                                    </span>
+                                  ) : null}
                                   <BranchTag>worktree</BranchTag>
                                 </span>
                                 <span className="block truncate text-xs text-muted-foreground">
@@ -663,6 +714,10 @@ export function Sidebar({
                                   onAbandonWorktree={onAbandonWorktree}
                                   onRemoveMissing={onRemoveMissing}
                                   onDeleteWorktree={onDeleteWorktree}
+                                  depLinkStatus={worktree.depLink?.status ?? "none"}
+                                  onLinkNodeModules={onLinkNodeModules}
+                                  onRelinkNodeModules={onRelinkNodeModules}
+                                  onUnlinkNodeModules={onUnlinkNodeModules}
                                 />
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -724,6 +779,10 @@ export function Sidebar({
                   onAbandonWorktree={onAbandonWorktree}
                   onRemoveMissing={onRemoveMissing}
                   onDeleteWorktree={onDeleteWorktree}
+                  depLinkStatus={contextWorktree.depLink?.status ?? "none"}
+                  onLinkNodeModules={onLinkNodeModules}
+                  onRelinkNodeModules={onRelinkNodeModules}
+                  onUnlinkNodeModules={onUnlinkNodeModules}
                 />
               ) : null}
             </DropdownMenuContent>

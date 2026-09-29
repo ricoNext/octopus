@@ -38,6 +38,10 @@ pub struct Worktree {
     pub status: WorktreeStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dep_link: Option<DepLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,3 +117,77 @@ pub struct RefreshProjectWorktreesResult {
     pub imported: Vec<String>,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DepLinkStatus {
+    None,
+    Linked,
+    Broken,
+}
+
+impl Default for DepLinkStatus {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLinkEntry {
+    /// "" = repo root; never "."
+    pub rel_path: String,
+    pub status: DepLinkStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLink {
+    pub kind: String,
+    pub status: DepLinkStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_at: Option<String>,
+    #[serde(default)]
+    pub links: Vec<DepLinkEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanNodeModulesResult {
+    pub rel_paths: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum LinkNodeModulesResult {
+    Ok { snapshot: AppSnapshot },
+    /// Phase 1 single-path kept for compat; batch uses conflict_count
+    NeedsConfirm {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conflict: Option<String>, // "directory" | "symlink" for single-path wrapper
+        #[serde(default)]
+        conflict_count: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlinkNodeModulesBatchResult {
+    pub snapshot: AppSnapshot,
+    pub notices: Vec<String>, // Chinese messages for skipped real dirs etc.
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepLinkStatusItem {
+    pub path: String,
+    pub status: DepLinkStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
+    pub source_ok: bool, // `{path}/node_modules` usable as link source
+}

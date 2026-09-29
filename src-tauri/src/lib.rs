@@ -1,5 +1,6 @@
 mod agent_detect;
 mod commands;
+mod dep_link;
 mod git;
 mod models;
 mod paths;
@@ -107,6 +108,13 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::list_agent_presence,
+            commands::link_worktree_node_modules,
+            commands::unlink_worktree_node_modules,
+            commands::scan_worktree_node_modules,
+            commands::link_worktree_node_modules_batch,
+            commands::unlink_worktree_node_modules_batch,
+            commands::get_worktree_dep_link_status,
+            commands::list_node_modules_link_sources,
         ])
         .build(tauri::generate_context!())
         .expect("启动应用失败")

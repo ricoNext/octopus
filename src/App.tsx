@@ -66,6 +66,9 @@ import { subscribeAgentPresence } from "@/lib/agents/presence-store";
 import { findSessionLocation } from "@/lib/agents/resolve-session";
 import type { AgentPresence } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
+import { defaultSelectedRelPaths } from "@/lib/dep-link/default-selected-rel-paths";
+import { basedOnLabel, resolveBasedOnPath } from "@/lib/dep-link/resolve-based-on";
+import { relPathLabel } from "@/lib/dep-link/rel-path-label";
 import { matchKeybinding } from "@/lib/keybindings";
 import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
@@ -85,9 +88,11 @@ import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
+  DepLinkStatusItem,
   ExistingWorktree,
   InspectResult,
   Project,
+  ScanNodeModulesResult,
   Selection,
   Worktree,
 } from "@/types";
@@ -107,6 +112,43 @@ type RenameTabTarget = {
   contextId: string;
   tabId: string;
 };
+
+type LinkPickerState = {
+  target: Worktree;
+  mode: "link" | "relink";
+  sources: DepLinkStatusItem[];
+  selectedSource: string;
+  availableRelPaths: string[];
+  selectedRelPaths: string[];
+  truncated: boolean;
+} | null;
+
+type OverwriteState = {
+  targetPath: string;
+  sourcePath: string;
+  relPaths: string[];
+  conflictCount: number;
+  conflict?: string | null;
+} | null;
+
+type UnlinkConfirmState = Worktree | null;
+
+function recordedRelPathsForPicker(worktree: Worktree): string[] {
+  const links = worktree.depLink?.links;
+  if (links && links.length > 0) {
+    return links.map((entry) => entry.relPath);
+  }
+  // Phase 1 top-level linked/broken without links[] — treat as root.
+  if (
+    worktree.depLink &&
+    (worktree.depLink.status === "linked" ||
+      worktree.depLink.status === "broken" ||
+      worktree.depLink.linkedFrom)
+  ) {
+    return [""];
+  }
+  return [];
+}
 
 type PersistedTerminalState = {
   version?: number;
@@ -297,6 +339,10 @@ export default function App() {
   const [startFromQuery, setStartFromQuery] = useState("");
   const [localBranches, setLocalBranches] = useState<string[]>([]);
   const [worktreeParent, setWorktreeParent] = useState("");
+  const [linkNodeModules, setLinkNodeModules] = useState(false);
+  const [createScan, setCreateScan] = useState<ScanNodeModulesResult | null>(null);
+  const [createSelectedRels, setCreateSelectedRels] = useState<string[]>([]);
+  const [createPackagesOpen, setCreatePackagesOpen] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Worktree | null>(null);
   const [deleteBranchToo, setDeleteBranchToo] = useState(false);
@@ -306,6 +352,13 @@ export default function App() {
 
   const [removeProjectId, setRemoveProjectId] = useState<string | null>(null);
   const [removeProjectCount, setRemoveProjectCount] = useState(0);
+
+  const [linkPicker, setLinkPicker] = useState<LinkPickerState>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<OverwriteState>(null);
+  const [unlinkConfirm, setUnlinkConfirm] = useState<UnlinkConfirmState>(null);
+  const overwriteConfirmRef = useRef<OverwriteState>(null);
+  const unlinkConfirmRef = useRef<UnlinkConfirmState>(null);
+  const linkPickerRef = useRef<LinkPickerState>(null);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -388,6 +441,78 @@ export default function App() {
     }
     return null;
   }, [projects, selectedWorktree, selection]);
+
+  const createProject = useMemo(
+    () => projects.find((item) => item.id === createProjectId) ?? null,
+    [projects, createProjectId],
+  );
+  const basedOnPath = useMemo(() => {
+    if (!createProject || !startFrom) {
+      return null;
+    }
+    return resolveBasedOnPath(createProject, startFrom, worktrees);
+  }, [createProject, startFrom, worktrees]);
+
+  // Scan based-on source for create-dialog multi-select. Re-scan when based-on
+  // identity changes; toast truncated notice once per identity.
+  const createScanKeyRef = useRef<string | null>(null);
+  const createTruncatedToastKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!createProjectId || !basedOnPath) {
+      createScanKeyRef.current = null;
+      setCreateScan(null);
+      setCreateSelectedRels([]);
+      setLinkNodeModules(false);
+      setCreatePackagesOpen(false);
+      return;
+    }
+    const identityKey = `${createProjectId}::${startFrom}::${basedOnPath}`;
+    if (createScanKeyRef.current === identityKey) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const scan = await api.scanWorktreeNodeModules(basedOnPath);
+        if (cancelled) {
+          return;
+        }
+        createScanKeyRef.current = identityKey;
+        setCreateScan(scan);
+        if (scan.relPaths.length === 0) {
+          setCreateSelectedRels([]);
+          setLinkNodeModules(false);
+          setCreatePackagesOpen(false);
+          return;
+        }
+        setCreateSelectedRels(
+          defaultSelectedRelPaths({
+            mode: "link",
+            available: scan.relPaths,
+            recorded: [],
+          }),
+        );
+        setLinkNodeModules(true);
+        if (scan.truncated && createTruncatedToastKeyRef.current !== identityKey) {
+          createTruncatedToastKeyRef.current = identityKey;
+          toast.message("已截断，仅显示前 50 个");
+        }
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        createScanKeyRef.current = identityKey;
+        setCreateScan(null);
+        setCreateSelectedRels([]);
+        setLinkNodeModules(false);
+        setCreatePackagesOpen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [createProjectId, startFrom, basedOnPath]);
 
   const selectedContextId =
     selection.kind === "main"
@@ -976,6 +1101,12 @@ export default function App() {
       setStartFrom(initialStartFrom);
       setStartFromQuery("");
       setWorktreeParent(parent);
+      setLinkNodeModules(false);
+      setCreateScan(null);
+      setCreateSelectedRels([]);
+      setCreatePackagesOpen(false);
+      createScanKeyRef.current = null;
+      createTruncatedToastKeyRef.current = null;
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -1005,11 +1136,41 @@ export default function App() {
         startFrom.trim() ? startFrom.trim() : null,
         worktreeParent.trim() ? worktreeParent.trim() : null,
       );
-      applySnapshot(mutation.snapshot, mutation.focusedWorktreeId);
+      const focusedId = mutation.focusedWorktreeId;
+      applySnapshot(mutation.snapshot, focusedId);
       if (mutation.error) {
         toast.error(mutation.error);
+      } else if (linkNodeModules && focusedId && createSelectedRels.length > 0) {
+        const created = mutation.snapshot.worktrees.find((w) => w.id === focusedId);
+        const project = mutation.snapshot.projects.find((p) => p.id === createProjectId);
+        if (created && project) {
+          const source =
+            created.basedOnPath ??
+            resolveBasedOnPath(project, startFrom.trim(), mutation.snapshot.worktrees);
+          try {
+            const linkResult = await api.linkWorktreeNodeModulesBatch(
+              created.path,
+              source,
+              createSelectedRels,
+              false,
+            );
+            if (linkResult.status === "needsConfirm") {
+              toast.error("目标已有 node_modules，请稍后在菜单中链接");
+            } else {
+              applySnapshot(linkResult.snapshot, focusedId);
+            }
+          } catch (error) {
+            toast.error(`工作树已创建，但链接 node_modules 失败：${invokeError(error)}`);
+          }
+        }
       }
       setCreateProjectId(null);
+      setLinkNodeModules(false);
+      setCreateScan(null);
+      setCreateSelectedRels([]);
+      setCreatePackagesOpen(false);
+      createScanKeyRef.current = null;
+      createTruncatedToastKeyRef.current = null;
     } catch (error) {
       toast.error(invokeError(error));
     }
@@ -1242,6 +1403,147 @@ export default function App() {
     [tabsByContext, worktrees, projects],
   );
 
+  async function openLinkPicker(worktree: Worktree, mode: "link" | "relink") {
+    try {
+      const sources = await api.listNodeModulesLinkSources(worktree.projectId, worktree.path);
+      if (sources.length === 0) {
+        toast.error("同项目没有可用的 node_modules 源");
+        return;
+      }
+      const basedOn = worktree.basedOnPath ?? null;
+      const selectedSource =
+        basedOn && sources.some((item) => item.path === basedOn)
+          ? basedOn
+          : sources[0].path;
+      const scan = await api.scanWorktreeNodeModules(selectedSource);
+      if (scan.truncated) {
+        toast.message("已截断，仅显示前 50 个");
+      }
+      const recorded = recordedRelPathsForPicker(worktree);
+      const selectedRelPaths = defaultSelectedRelPaths({
+        mode,
+        available: scan.relPaths,
+        recorded,
+      });
+      const next = {
+        target: worktree,
+        mode,
+        sources,
+        selectedSource,
+        availableRelPaths: scan.relPaths,
+        selectedRelPaths,
+        truncated: scan.truncated,
+      } as Exclude<LinkPickerState, null>;
+      linkPickerRef.current = next;
+      setLinkPicker(next);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function selectLinkPickerSource(sourcePath: string) {
+    const current = linkPickerRef.current;
+    if (!current || current.selectedSource === sourcePath) {
+      return;
+    }
+    try {
+      const scan = await api.scanWorktreeNodeModules(sourcePath);
+      if (scan.truncated) {
+        toast.message("已截断，仅显示前 50 个");
+      }
+      const recorded = recordedRelPathsForPicker(current.target);
+      const selectedRelPaths = defaultSelectedRelPaths({
+        mode: current.mode,
+        available: scan.relPaths,
+        recorded,
+      });
+      const next = {
+        ...current,
+        selectedSource: sourcePath,
+        availableRelPaths: scan.relPaths,
+        selectedRelPaths,
+        truncated: scan.truncated,
+      };
+      linkPickerRef.current = next;
+      setLinkPicker(next);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function confirmLinkFromPicker(force: boolean) {
+    const picker = linkPickerRef.current;
+    const overwrite = overwriteConfirmRef.current;
+    const targetPath = force ? overwrite?.targetPath : picker?.target.path;
+    const sourcePath = force ? overwrite?.sourcePath : picker?.selectedSource;
+    const relPaths = force
+      ? (overwrite?.relPaths ?? [])
+      : (picker?.selectedRelPaths ?? []);
+    if (!targetPath || !sourcePath || relPaths.length === 0) {
+      return;
+    }
+    try {
+      const result = await api.linkWorktreeNodeModulesBatch(
+        targetPath,
+        sourcePath,
+        relPaths,
+        force,
+      );
+      if (result.status === "needsConfirm") {
+        const next = {
+          targetPath,
+          sourcePath,
+          relPaths: picker?.selectedRelPaths ?? overwrite?.relPaths ?? relPaths,
+          conflictCount: result.conflictCount,
+          conflict: result.conflict,
+        } as Exclude<OverwriteState, null>;
+        overwriteConfirmRef.current = next;
+        setOverwriteConfirm(next);
+        linkPickerRef.current = null;
+        setLinkPicker(null);
+        return;
+      }
+      applySnapshot(result.snapshot);
+      linkPickerRef.current = null;
+      setLinkPicker(null);
+      overwriteConfirmRef.current = null;
+      setOverwriteConfirm(null);
+    } catch (error) {
+      toast.error(invokeError(error));
+    }
+  }
+
+  async function confirmUnlink() {
+    const target = unlinkConfirmRef.current;
+    if (!target) {
+      return;
+    }
+    try {
+      const result = await api.unlinkWorktreeNodeModulesBatch(target.path, null);
+      applySnapshot(result.snapshot);
+      for (const notice of result.notices) {
+        toast.message(notice);
+      }
+      unlinkConfirmRef.current = null;
+      setUnlinkConfirm(null);
+    } catch (error) {
+      toast.error(invokeError(error));
+      unlinkConfirmRef.current = null;
+      setUnlinkConfirm(null);
+    }
+  }
+
+  function linkPickerSourceLabel(sourcePath: string): string {
+    if (!linkPicker) {
+      return sourcePath;
+    }
+    const project = projects.find((item) => item.id === linkPicker.target.projectId);
+    if (!project) {
+      return sourcePath;
+    }
+    return basedOnLabel(project, sourcePath, worktrees);
+  }
+
   function selectWorkspace(selection: Selection) {
     setView("workspace");
     setSelection(selection);
@@ -1292,6 +1594,12 @@ export default function App() {
           onOpenEditor={(path) => void handleOpenEditor(path)}
           editorConfigured={Boolean(defaultEditor.trim())}
           onRevealFinder={(path) => void handleRevealFinder(path)}
+          onLinkNodeModules={(worktree) => void openLinkPicker(worktree, "link")}
+          onRelinkNodeModules={(worktree) => void openLinkPicker(worktree, "relink")}
+          onUnlinkNodeModules={(worktree) => {
+            unlinkConfirmRef.current = worktree;
+            setUnlinkConfirm(worktree);
+          }}
           onListBranchOptions={(projectId) => api.listBranchOptions(projectId)}
           onSwitchMainBranch={handleSwitchMainBranch}
           onOpenSettings={() => setView("settings")}
@@ -1811,6 +2119,66 @@ export default function App() {
                 ))}
               </div>
             </div>
+            {createProject && basedOnPath ? (
+              <label className={cn("flex items-start gap-2 text-sm", !(createScan && createScan.relPaths.length) && "opacity-50")}>
+                <Checkbox
+                  checked={linkNodeModules}
+                  disabled={!createScan || createScan.relPaths.length === 0}
+                  onCheckedChange={(v) => {
+                    const on = v === true;
+                    setLinkNodeModules(on);
+                    if (on && createScan) {
+                      setCreateSelectedRels(
+                        defaultSelectedRelPaths({
+                          mode: "link",
+                          available: createScan.relPaths,
+                          recorded: [],
+                        }),
+                      );
+                    }
+                  }}
+                />
+                <span className="grid gap-0.5 flex-1">
+                  <span className="flex items-center justify-between gap-2">
+                    <span>链接源的 node_modules</span>
+                    {linkNodeModules && createScan && createScan.relPaths.length > 0 ? (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline"
+                        onClick={() => setCreatePackagesOpen((o) => !o)}
+                      >
+                        {createPackagesOpen
+                          ? "收起"
+                          : `已选 ${createSelectedRels.length}/${createScan.relPaths.length}`}
+                      </button>
+                    ) : null}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {createScan && createScan.relPaths.length > 0
+                      ? `源：${basedOnLabel(createProject, basedOnPath, worktrees)}`
+                      : "源尚无 node_modules"}
+                  </span>
+                  {createPackagesOpen && createScan ? (
+                    <div className="mt-1 max-h-40 overflow-auto grid gap-1 border rounded-md p-2">
+                      {createScan.relPaths.map((rel) => (
+                        <label key={rel || "__root"} className="flex items-center gap-2 text-xs">
+                          <Checkbox
+                            checked={createSelectedRels.includes(rel)}
+                            onCheckedChange={(v) => {
+                              setCreateSelectedRels((prev) => {
+                                if (v === true) return prev.includes(rel) ? prev : [...prev, rel];
+                                return prev.filter((x) => x !== rel);
+                              });
+                            }}
+                          />
+                          <span>{relPathLabel(rel)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </span>
+              </label>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateProjectId(null)}>
@@ -1822,6 +2190,146 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={Boolean(linkPicker)}
+        onOpenChange={(open) => {
+          if (!open) {
+            linkPickerRef.current = null;
+            setLinkPicker(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {linkPicker?.mode === "relink" ? "重新链接 node_modules" : "链接 node_modules"}
+            </DialogTitle>
+            <DialogDescription>
+              选择同项目中已有 node_modules 的源，并勾选要链接的路径。目标：
+              {linkPicker ? ` ${linkPicker.target.branchName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+              {linkPicker?.sources.map((source) => (
+                <button
+                  type="button"
+                  key={source.path}
+                  className={cn(
+                    "block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted",
+                    source.path === linkPicker.selectedSource && "bg-muted font-medium",
+                  )}
+                  onClick={() => void selectLinkPickerSource(source.path)}
+                >
+                  <span className="block">{linkPickerSourceLabel(source.path)}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{source.path}</span>
+                </button>
+              ))}
+            </div>
+            {linkPicker && linkPicker.availableRelPaths.length > 0 ? (
+              <div className="max-h-40 overflow-y-auto rounded-md border p-2 grid gap-1">
+                <div className="text-xs text-muted-foreground mb-1">
+                  已选 {linkPicker.selectedRelPaths.length}/{linkPicker.availableRelPaths.length}
+                </div>
+                {linkPicker.availableRelPaths.map((rel) => (
+                  <label key={rel || "__root"} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={linkPicker.selectedRelPaths.includes(rel)}
+                      onCheckedChange={(value) => {
+                        setLinkPicker((current) => {
+                          if (!current) {
+                            return current;
+                          }
+                          const selectedRelPaths =
+                            value === true
+                              ? current.selectedRelPaths.includes(rel)
+                                ? current.selectedRelPaths
+                                : [...current.selectedRelPaths, rel]
+                              : current.selectedRelPaths.filter((item) => item !== rel);
+                          const next = { ...current, selectedRelPaths };
+                          linkPickerRef.current = next;
+                          return next;
+                        });
+                      }}
+                    />
+                    <span>{relPathLabel(rel)}</span>
+                  </label>
+                ))}
+              </div>
+            ) : linkPicker ? (
+              <p className="text-sm text-muted-foreground">所选源没有可链接的 node_modules</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                linkPickerRef.current = null;
+                setLinkPicker(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={!linkPicker?.selectedSource || (linkPicker?.selectedRelPaths.length ?? 0) === 0}
+              onClick={() => void confirmLinkFromPicker(false)}
+            >
+              链接
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(overwriteConfirm)}
+        onOpenChange={(open) => {
+          if (!open) {
+            overwriteConfirmRef.current = null;
+            setOverwriteConfirm(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>覆盖并链接 node_modules</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`将覆盖 ${overwriteConfirm?.conflictCount ?? 0} 个已存在的 node_modules 路径（含真实目录或旧软链），并链接到所选源。此操作不可从本应用撤销。`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmLinkFromPicker(true)}>
+              覆盖并链接
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(unlinkConfirm)}
+        onOpenChange={(open) => {
+          if (!open) {
+            unlinkConfirmRef.current = null;
+            setUnlinkConfirm(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消链接</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定取消本工作树由本功能创建的全部 node_modules 软链？不会自动安装依赖。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmUnlink()}>
+              取消链接
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={Boolean(deleteTarget) && !forceStderr}
