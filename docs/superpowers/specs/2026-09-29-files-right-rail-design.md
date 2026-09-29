@@ -4,6 +4,8 @@
 **Status:** draft → pending user review  
 **Approach:** A — custom Tauri fs commands + Files registry module + center terminal|preview split
 
+> **Superseded (preview presentation only):** terminal\|preview horizontal split replaced by sibling center tab — see `docs/superpowers/specs/2026-09-29-files-preview-sibling-tab-design.md`.
+
 ## Goal
 
 Add an Orca-inspired **Files** experience to Octopus:
