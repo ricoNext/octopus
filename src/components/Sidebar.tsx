@@ -475,7 +475,7 @@ export function Sidebar({
                           !collapsed && "rotate-90",
                         )}
                       />
-                      <span className="min-w-0 truncate text-xs font-medium tracking-wide text-muted-foreground">
+                      <span className="min-w-0 truncate text-sm font-semibold text-sidebar-foreground">
                         {project.name}
                       </span>
                     </button>
@@ -547,7 +547,7 @@ export function Sidebar({
                             />
                             <span className="min-w-0 flex-1">
                               <span className="flex min-w-0 items-center gap-1.5">
-                                <span className="truncate">{project.mainBranch ?? "HEAD"}</span>
+                                <span className="truncate text-muted-foreground">{project.mainBranch ?? "HEAD"}</span>
                                 <BranchTag>主分支</BranchTag>
                               </span>
                               <span className="block truncate text-xs text-muted-foreground">
@@ -666,7 +666,7 @@ export function Sidebar({
                               />
                               <span className="min-w-0">
                                 <span className="flex min-w-0 items-center gap-1.5">
-                                  <span className="truncate">{worktree.branchName}</span>
+                                  <span className="truncate text-muted-foreground">{worktree.branchName}</span>
                                   {worktree.depLink?.status === "linked" ? (
                                     <span title="node_modules 已链接" className="inline-flex shrink-0">
                                       <LinkIcon
