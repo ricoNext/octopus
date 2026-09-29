@@ -86,6 +86,11 @@ import {
   warmMountKey,
 } from "@/lib/terminal/warm-retain";
 import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
+import {
+  closePreviewState,
+  fileNameFromRel,
+  type CenterSurface,
+} from "@/lib/files/preview-chip";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
@@ -165,10 +170,6 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const RIGHT_RAIL_WIDTH_KEY = "octopus.right-rail.width";
 const DEFAULT_RIGHT_RAIL_WIDTH = 280;
-const CENTER_PREVIEW_WIDTH_KEY = "octopus.center-preview.width";
-const DEFAULT_CENTER_PREVIEW_WIDTH = 420;
-const MIN_CENTER_PREVIEW_WIDTH = 240;
-const MAX_CENTER_PREVIEW_WIDTH = 900;
 const THEME_KEY = "octopus.theme";
 const DEFAULT_EDITOR_KEY = "octopus.default-editor";
 type ThemePreference = "light" | "dark" | "system";
@@ -245,17 +246,6 @@ function readRightRailWidth(): number {
     return Number.isFinite(value) && value > 0 ? value : DEFAULT_RIGHT_RAIL_WIDTH;
   } catch {
     return DEFAULT_RIGHT_RAIL_WIDTH;
-  }
-}
-
-function readCenterPreviewWidth(): number {
-  try {
-    const value = Number(localStorage.getItem(CENTER_PREVIEW_WIDTH_KEY));
-    return Number.isFinite(value)
-      ? Math.min(MAX_CENTER_PREVIEW_WIDTH, Math.max(MIN_CENTER_PREVIEW_WIDTH, value))
-      : DEFAULT_CENTER_PREVIEW_WIDTH;
-  } catch {
-    return DEFAULT_CENTER_PREVIEW_WIDTH;
   }
 }
 
@@ -349,11 +339,7 @@ export default function App() {
   const rightRailShellRef = useRef<HTMLDivElement | null>(null);
   const rightRailResizePointerRef = useRef<{ pointerId: number } | null>(null);
   const [filePreview, setFilePreview] = useState<FilePreviewState>(null);
-  const [centerPreviewWidth, setCenterPreviewWidth] = useState(readCenterPreviewWidth);
-  const [isResizingCenterPreview, setIsResizingCenterPreview] = useState(false);
-  const centerSplitRef = useRef<HTMLDivElement | null>(null);
-  const centerPreviewShellRef = useRef<HTMLDivElement | null>(null);
-  const centerPreviewResizePointerRef = useRef<{ pointerId: number } | null>(null);
+  const [centerSurface, setCenterSurface] = useState<CenterSurface>("terminal");
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
@@ -442,22 +428,14 @@ export default function App() {
   }, [rightRailWidth]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(CENTER_PREVIEW_WIDTH_KEY, String(centerPreviewWidth));
-    } catch {
-      // 本地存储不可用时，宽度仍可在当前会话中正常调整。
-    }
-  }, [centerPreviewWidth]);
-
-  useEffect(() => {
-    const resizing = isResizingSidebar || isResizingRightRail || isResizingCenterPreview;
+    const resizing = isResizingSidebar || isResizingRightRail;
     document.body.style.cursor = resizing ? "col-resize" : "";
     document.body.style.userSelect = resizing ? "none" : "";
     return () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizingSidebar, isResizingRightRail, isResizingCenterPreview]);
+  }, [isResizingSidebar, isResizingRightRail]);
 
   const projects = snapshot.projects;
   const worktrees = snapshot.worktrees;
@@ -563,10 +541,6 @@ export default function App() {
         ? selectedWorktree?.path ?? null
         : null;
 
-  useEffect(() => {
-    setFilePreview(null);
-  }, [selectedContextId, filesRootPath]);
-
   const handleOpenFilePreview = useCallback(
     async (args: { rootPath: string; relPath: string }) => {
       try {
@@ -576,12 +550,19 @@ export default function App() {
           relPath: args.relPath,
           content,
         });
+        setCenterSurface("preview");
       } catch (error) {
         toast.error(invokeError(error));
       }
     },
     [],
   );
+
+  const handleCloseFilePreview = useCallback(() => {
+    const next = closePreviewState(centerSurface);
+    setFilePreview(next.filePreview);
+    setCenterSurface(next.centerSurface);
+  }, [centerSurface]);
 
   const selectedTabs = selectedContextId ? tabsByContext[selectedContextId] ?? [] : [];
   const activeTabId = selectedContextId
@@ -1777,7 +1758,7 @@ export default function App() {
             <div ref={tabsViewportRef} className="tabs-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto pt-1">
               <div ref={tabsContentRef} className="flex min-w-max items-end gap-1">
               {selectedTabs.map((tab) => {
-              const active = tab.id === activeTabId;
+              const active = tab.id === activeTabId && centerSurface === "terminal";
               return (
                 <div
                   key={tab.id}
@@ -1796,13 +1777,14 @@ export default function App() {
                   <button
                     type="button"
                     className="min-w-0 flex-1 truncate text-left"
-                    onClick={() =>
-                      selectedContextId &&
+                    onClick={() => {
+                      if (!selectedContextId) return;
                       setActiveTabByContext((current) => ({
                         ...current,
                         [selectedContextId]: tab.id,
-                      }))
-                    }
+                      }));
+                      setCenterSurface("terminal");
+                    }}
                   >
                     {tab.label}
                   </button>
@@ -1819,6 +1801,34 @@ export default function App() {
                 </div>
               );
               })}
+              {filePreview ? (
+                <div
+                  className={cn(
+                    "group flex h-9 max-w-48 shrink-0 items-center gap-1 rounded-t-md border border-b-0 px-2 text-sm",
+                    centerSurface === "preview"
+                      ? "border-border bg-background text-foreground"
+                      : "border-transparent text-muted-foreground hover:bg-background/70",
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left"
+                    title={filePreview.relPath}
+                    onClick={() => setCenterSurface("preview")}
+                  >
+                    {fileNameFromRel(filePreview.relPath)}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded p-0.5 text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                    onClick={handleCloseFilePreview}
+                    aria-label="关闭预览"
+                    title="关闭预览"
+                  >
+                    <XIcon className="size-3.5" />
+                  </button>
+                </div>
+              ) : null}
               {!tabsOverflowing && newTerminalButton}
               </div>
             </div>
@@ -1928,18 +1938,21 @@ export default function App() {
             </DropdownMenuContent>
           </DropdownMenu>
             </div>
-            <div ref={centerSplitRef} className="relative flex min-h-0 flex-1">
-              <div className="relative min-h-0 min-w-0 flex-1">
+            <div className="relative min-h-0 flex-1">
           {terminalContexts.flatMap((context) =>
             (tabsByContext[context.id] ?? []).flatMap((tab) => {
               if (!warmMountKeys.has(warmMountKey(context.id, tab.id))) {
                 return [];
               }
+              const visible =
+                centerSurface === "terminal" &&
+                selectedContextId === context.id &&
+                activeTabId === tab.id;
               return [
                 <div
                   key={`${context.id}::${tab.id}`}
                   className={
-                    selectedContextId === context.id && activeTabId === tab.id
+                    visible
                       ? "absolute inset-0"
                       : "pointer-events-none invisible absolute inset-0"
                   }
@@ -1947,7 +1960,7 @@ export default function App() {
                   <TerminalWorkspace
                     tab={tab}
                     cwdId={context.cwdId}
-                    active={selectedContextId === context.id && activeTabId === tab.id}
+                    active={visible}
                     onChange={(nextTab) => {
                       setTabsByContext((current) => ({
                         ...current,
@@ -1967,7 +1980,7 @@ export default function App() {
               ];
             }),
           )}
-          {!showTerminal ? (
+          {!showTerminal && centerSurface === "terminal" ? (
             <div className="absolute inset-0 flex items-center justify-center p-6">
               <EmptyMain
                 project={selectedProject}
@@ -1984,93 +1997,16 @@ export default function App() {
               />
             </div>
           ) : null}
-              </div>
-              {filePreview ? (
-                <>
-                  <div
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label="调整预览宽度"
-                    aria-valuenow={centerPreviewWidth}
-                    tabIndex={0}
-                    className={cn(
-                      "group relative z-20 flex h-full w-3 shrink-0 touch-none cursor-col-resize items-stretch justify-center outline-none",
-                      isResizingCenterPreview && "cursor-col-resize",
-                    )}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      centerPreviewResizePointerRef.current = { pointerId: event.pointerId };
-                      setIsResizingCenterPreview(true);
-                    }}
-                    onPointerMove={(event) => {
-                      if (centerPreviewResizePointerRef.current?.pointerId !== event.pointerId) {
-                        return;
-                      }
-                      const splitRect = centerSplitRef.current?.getBoundingClientRect();
-                      if (!splitRect) {
-                        return;
-                      }
-                      const nextWidth = Math.min(
-                        MAX_CENTER_PREVIEW_WIDTH,
-                        Math.max(MIN_CENTER_PREVIEW_WIDTH, Math.round(splitRect.right - event.clientX)),
-                      );
-                      if (centerPreviewShellRef.current) {
-                        centerPreviewShellRef.current.style.width = `${nextWidth}px`;
-                      }
-                    }}
-                    onPointerUp={(event) => {
-                      if (centerPreviewResizePointerRef.current?.pointerId !== event.pointerId) {
-                        return;
-                      }
-                      const nextWidth =
-                        centerPreviewShellRef.current?.getBoundingClientRect().width ??
-                        centerPreviewWidth;
-                      centerPreviewResizePointerRef.current = null;
-                      setIsResizingCenterPreview(false);
-                      setCenterPreviewWidth(
-                        Math.min(
-                          MAX_CENTER_PREVIEW_WIDTH,
-                          Math.max(MIN_CENTER_PREVIEW_WIDTH, Math.round(nextWidth)),
-                        ),
-                      );
-                      event.currentTarget.releasePointerCapture(event.pointerId);
-                    }}
-                    onPointerCancel={() => {
-                      centerPreviewResizePointerRef.current = null;
-                      setIsResizingCenterPreview(false);
-                    }}
-                    onKeyDown={(event) => {
-                      const step = event.shiftKey ? 32 : 16;
-                      if (event.key === "ArrowLeft") {
-                        event.preventDefault();
-                        setCenterPreviewWidth((current) =>
-                          Math.min(MAX_CENTER_PREVIEW_WIDTH, current + step),
-                        );
-                      } else if (event.key === "ArrowRight") {
-                        event.preventDefault();
-                        setCenterPreviewWidth((current) =>
-                          Math.max(MIN_CENTER_PREVIEW_WIDTH, current - step),
-                        );
-                      }
-                    }}
-                  >
-                    <span className="h-full w-px bg-border/80 transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary/70" />
-                  </div>
-                  <div
-                    ref={centerPreviewShellRef}
-                    className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l"
-                    style={{ width: centerPreviewWidth }}
-                  >
-                    <FilePreview
-                      rootPath={filePreview.rootPath}
-                      relPath={filePreview.relPath}
-                      content={filePreview.content}
-                      onClose={() => setFilePreview(null)}
-                    />
-                  </div>
-                </>
-              ) : null}
+          {filePreview && centerSurface === "preview" ? (
+            <div className="absolute inset-0">
+              <FilePreview
+                rootPath={filePreview.rootPath}
+                relPath={filePreview.relPath}
+                content={filePreview.content}
+                onClose={handleCloseFilePreview}
+              />
+            </div>
+          ) : null}
             </div>
           </>
         )}
