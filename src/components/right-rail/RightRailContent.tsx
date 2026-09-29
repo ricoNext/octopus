@@ -13,5 +13,7 @@ export function RightRailContent({ activeId, ctx }: RightRailContentProps) {
       <div className="p-3 text-sm text-muted-foreground">未找到模块：{activeId}</div>
     );
   }
-  return <div className="min-h-0 flex-1 overflow-y-auto p-3">{module.render(ctx)}</div>;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">{module.render(ctx)}</div>
+  );
 }

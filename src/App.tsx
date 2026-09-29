@@ -520,6 +520,12 @@ export default function App() {
       : selection.kind === "worktree"
         ? selection.worktreeId
         : null;
+  const filesRootPath =
+    selection.kind === "main"
+      ? selectedProject?.rootPath ?? null
+      : selection.kind === "worktree"
+        ? selectedWorktree?.path ?? null
+        : null;
   const selectedTabs = selectedContextId ? tabsByContext[selectedContextId] ?? [] : [];
   const activeTabId = selectedContextId
     ? activeTabByContext[selectedContextId] ?? selectedTabs[0]?.id
@@ -2007,6 +2013,7 @@ export default function App() {
                 contextId={selectedContextId}
                 agentRows={agentRows}
                 onFocusAgent={focusAgentSession}
+                filesRootPath={filesRootPath}
               />
             </>
           )}

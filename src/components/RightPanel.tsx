@@ -22,6 +22,8 @@ type RightPanelProps = {
   contextId?: string | null;
   agentRows?: AgentRowView[];
   onFocusAgent?: (sessionId: string) => void;
+  filesRootPath?: string | null;
+  onOpenFilePreview?: (args: { rootPath: string; relPath: string }) => void;
 };
 
 function readActiveModuleId(): RightRailModuleId {
@@ -42,10 +44,12 @@ export function RightPanel({
   contextId = null,
   agentRows = [],
   onFocusAgent,
+  filesRootPath = null,
+  onOpenFilePreview,
 }: RightPanelProps) {
   const ctx = useMemo(
-    () => ({ contextId, agentRows, onFocusAgent }),
-    [contextId, agentRows, onFocusAgent],
+    () => ({ contextId, agentRows, onFocusAgent, filesRootPath, onOpenFilePreview }),
+    [contextId, agentRows, onFocusAgent, filesRootPath, onOpenFilePreview],
   );
   const visibleModules = useMemo(() => listVisibleRightRailModules(undefined, ctx), [ctx]);
   const [activeId, setActiveId] = useState<RightRailModuleId>(readActiveModuleId);

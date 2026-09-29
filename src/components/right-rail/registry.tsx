@@ -1,6 +1,7 @@
-import { BotIcon } from "lucide-react";
+import { BotIcon, FolderTreeIcon } from "lucide-react";
 
 import { AgentsModule } from "./modules/agents";
+import { FilesModule } from "./modules/files";
 import type { RightRailModule, RightRailModuleId } from "./types";
 
 /** Built-in modules. Add new features by appending here (Orca-style registry). */
@@ -11,6 +12,17 @@ export const RIGHT_RAIL_MODULES: readonly RightRailModule[] = [
     icon: BotIcon,
     render: (ctx) => (
       <AgentsModule rows={ctx.agentRows ?? []} onFocus={ctx.onFocusAgent} />
+    ),
+  },
+  {
+    id: "files",
+    title: "Files",
+    icon: FolderTreeIcon,
+    render: (ctx) => (
+      <FilesModule
+        rootPath={ctx.filesRootPath}
+        onOpenFilePreview={ctx.onOpenFilePreview}
+      />
     ),
   },
 ];
