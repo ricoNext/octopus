@@ -4,7 +4,7 @@
 **Status:** draft → pending user review  
 **Approach:** A — custom Tauri fs commands + Files registry module + center terminal|preview split
 
-> **Superseded (preview presentation only):** terminal\|preview horizontal split replaced by sibling center tab — see `docs/superpowers/specs/2026-09-29-files-preview-sibling-tab-design.md`.
+> **Superseded (preview presentation only):** terminal\|preview horizontal split replaced by sibling center tab — see `docs/superpowers/specs/2026-09-29-files-preview-sibling-tab-design.md`. That sibling-tab presentation is itself superseded by unified center tabs — see `docs/superpowers/specs/2026-09-29-files-center-tab-parity-design.md`.
 
 ## Goal
 

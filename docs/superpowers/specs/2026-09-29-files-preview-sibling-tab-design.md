@@ -1,9 +1,10 @@
 # Files preview as sibling center tab
 
 **Date:** 2026-09-29  
-**Status:** approved  
+**Status:** superseded (presentation)  
 **Approach:** A — lightweight faux strip chip + `centerSurface: "terminal" | "preview"`  
-**Supersedes:** preview *presentation* portion of `docs/superpowers/specs/2026-09-29-files-right-rail-design.md` (terminal|preview horizontal split). Files right-rail tree, fs commands, and read-only text preview content remain as specified there.
+**Supersedes:** preview *presentation* portion of `docs/superpowers/specs/2026-09-29-files-right-rail-design.md` (terminal|preview horizontal split). Files right-rail tree, fs commands, and read-only text preview content remain as specified there.  
+**Superseded by:** unified center tabs — `docs/superpowers/specs/2026-09-29-files-center-tab-parity-design.md` (file preview as first-class `CenterTab`; faux chip + `centerSurface` removed).
 
 ## Problem
 
