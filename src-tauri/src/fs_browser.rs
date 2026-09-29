@@ -1,4 +1,4 @@
-//! Path-jail filesystem browser helpers (Phase 1: read_dir).
+//! Path-jail filesystem browser helpers (Phase 1: read_dir + read_text_file).
 
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -117,6 +117,32 @@ pub fn read_dir_entries(root: &Path, rel: &str) -> Result<Vec<FsDirEntry>, Strin
     Ok(entries)
 }
 
+pub const MAX_TEXT_PREVIEW_BYTES: u64 = 2 * 1024 * 1024; // 2 MiB
+const BINARY_SNIFF_BYTES: usize = 8192;
+
+/// Read a UTF-8 text file under `root`/`rel` for preview.
+///
+/// Rejects paths that escape the root, files larger than [`MAX_TEXT_PREVIEW_BYTES`],
+/// binaries (NUL in the first 8192 bytes), and non-UTF-8 content.
+pub fn read_text_file(root: &Path, rel: &str) -> Result<String, String> {
+    let path = resolve_under_root(root, rel)?;
+    let meta = fs::metadata(&path).map_err(|e| format!("无法读取文件: {e}"))?;
+    if !meta.is_file() {
+        return Err("不是普通文件，无法预览".into());
+    }
+    if meta.len() > MAX_TEXT_PREVIEW_BYTES {
+        return Err("文件过大，无法预览".into());
+    }
+
+    let bytes = fs::read(&path).map_err(|e| format!("无法读取文件: {e}"))?;
+    let sniff_len = bytes.len().min(BINARY_SNIFF_BYTES);
+    if bytes[..sniff_len].contains(&0) {
+        return Err("二进制文件，无法预览".into());
+    }
+
+    String::from_utf8(bytes).map_err(|_| "不是有效的 UTF-8 文本".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +171,48 @@ mod tests {
         assert_eq!(names, vec!["a_dir", "b_dir", "a.txt", "z.txt"]);
         assert_eq!(entries[0].kind, "dir");
         assert_eq!(entries[2].kind, "file");
+    }
+
+    #[test]
+    fn read_text_ok() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("hi.txt"), b"hello").unwrap();
+        assert_eq!(read_text_file(&root, "hi.txt").unwrap(), "hello");
+    }
+
+    #[test]
+    fn reject_binary() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("bin.dat"), [0u8, 1, 2, 3, 0, 0, 0, 0]).unwrap();
+        let err = read_text_file(&root, "bin.dat").unwrap_err();
+        assert!(!err.is_empty());
+        assert!(err.contains("二进制") || err.contains("binary") || err.len() > 0);
+    }
+
+    #[test]
+    fn reject_oversize() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("big.txt");
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(MAX_TEXT_PREVIEW_BYTES + 1).unwrap();
+        let err = read_text_file(&root, "big.txt").unwrap_err();
+        assert!(err.contains("过大") || err.contains("无法预览"));
+    }
+
+    #[test]
+    fn reject_invalid_utf8() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        // No NUL in first 8192 so binary sniff passes; invalid UTF-8 bytes.
+        fs::write(root.join("bad.txt"), [0xFFu8, 0xFE, 0xFD]).unwrap();
+        let err = read_text_file(&root, "bad.txt").unwrap_err();
+        assert!(err.contains("UTF-8") || err.contains("utf"));
     }
 }
