@@ -116,3 +116,5 @@ export type DepLinkStatusItem = {
   sourceOk: boolean;
 };
 
+
+export type FsDirEntry = { name: string; kind: "dir" | "file" | "symlink" | string };

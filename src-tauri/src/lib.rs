@@ -116,6 +116,8 @@ pub fn run() {
             commands::unlink_worktree_node_modules_batch,
             commands::get_worktree_dep_link_status,
             commands::list_node_modules_link_sources,
+            commands::fs_read_dir,
+            commands::fs_read_text_file,
         ])
         .build(tauri::generate_context!())
         .expect("启动应用失败")

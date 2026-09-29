@@ -5,6 +5,7 @@ import type {
   BranchOptions,
   DeleteResult,
   DepLinkStatusItem,
+  FsDirEntry,
   InspectResult,
   LinkNodeModulesResult,
   MutationResult,
@@ -130,5 +131,9 @@ export const api = {
       projectId,
       excludePath,
     }),
+  fsReadDir: (rootPath: string, relPath: string) =>
+    invoke<FsDirEntry[]>("fs_read_dir", { rootPath, relPath }),
+  fsReadTextFile: (rootPath: string, relPath: string) =>
+    invoke<string>("fs_read_text_file", { rootPath, relPath }),
 };
 

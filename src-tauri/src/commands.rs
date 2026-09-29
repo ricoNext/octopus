@@ -743,6 +743,16 @@ pub fn list_node_modules_link_sources(
         .collect())
 }
 
+#[tauri::command]
+pub fn fs_read_dir(root_path: String, rel_path: String) -> Result<Vec<crate::fs_browser::FsDirEntry>, String> {
+    crate::fs_browser::read_dir_entries(Path::new(&root_path), &rel_path)
+}
+
+#[tauri::command]
+pub fn fs_read_text_file(root_path: String, rel_path: String) -> Result<String, String> {
+    crate::fs_browser::read_text_file(Path::new(&root_path), &rel_path)
+}
+
 pub fn init_state(app: &AppHandle) -> Result<(), String> {
     let dir = app
         .path()
