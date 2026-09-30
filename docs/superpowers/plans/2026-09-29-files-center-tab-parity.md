@@ -116,7 +116,7 @@ export function migrateTabsByContext(raw: unknown): Record<string, CenterTab[]>;
 export function sessionIdsForTab(tab: TerminalTab): string[]; // unchanged; terminal-only
 ```
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Extend `src/lib/terminal/terminal-tab.test.ts`:
 
@@ -236,7 +236,7 @@ describe("center-tab", () => {
 
 Keep existing `nextTerminalTabIndex` / `sessionIdsForTab` tests; update `migrateTerminalTab` usages to `migrateCenterTab` or keep a thin alias.
 
-- [ ] **Step 2: Run — expect FAIL**
+- [x] **Step 2: Run — expect FAIL**
 
 ```bash
 bun test src/lib/terminal/terminal-tab.test.ts
@@ -244,7 +244,7 @@ bun test src/lib/terminal/terminal-tab.test.ts
 
 Expected: missing exports / `kind` assertions fail.
 
-- [ ] **Step 3: Implement model + migrate + helpers**
+- [x] **Step 3: Implement model + migrate + helpers**
 
 In `terminal-tab.ts`:
 
@@ -261,13 +261,13 @@ In `terminal-tab.ts`:
 
 Optional: keep `migrateTerminalTab` as deprecated alias calling `migrateCenterTab` + assert terminal for old tests.
 
-- [ ] **Step 4: Run — expect PASS**
+- [x] **Step 4: Run — expect PASS**
 
 ```bash
 bun test src/lib/terminal/terminal-tab.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/lib/terminal/terminal-tab.ts src/lib/terminal/terminal-tab.test.ts
@@ -330,7 +330,7 @@ Rules to wire:
 | Center body | If active tab is file → full-bleed `FilePreview`; else terminal warm mounts / empty as today. |
 | Left selection | Tabs remain keyed by `contextId` (no clear of other contexts’ file tabs). |
 
-- [ ] **Step 1: Narrow agents lookup for mixed tabs**
+- [x] **Step 1: Narrow agents lookup for mixed tabs**
 
 ```ts
 // resolve-session.ts
@@ -357,7 +357,7 @@ export function findSessionLocation(
 
 Update `build-rows.ts` / tests to `CenterTab[]` (fixtures get `kind: "terminal"`).
 
-- [ ] **Step 2: Replace App preview surface state**
+- [x] **Step 2: Replace App preview surface state**
 
 Remove:
 
@@ -485,11 +485,11 @@ Split / close pane / rename: early-return unless `isTerminalTab(tab)`.
 
 `closeTerminalTabs`: when computing “would remove all tabs”, instead refuse if it would remove the **last terminal** (`tabs.filter(isTerminalTab)`); file tabs may remain. When killing sessions, only iterate terminal tabs in `idsToClose`.
 
-- [ ] **Step 3: Delete surface helpers from preview-chip**
+- [x] **Step 3: Delete surface helpers from preview-chip**
 
 Keep `fileNameFromRel` export (FilePreview + `createFileTab` may import it). Remove `CenterSurface` and `closePreviewState`. Update `preview-chip.test.ts` to basename-only tests.
 
-- [ ] **Step 4: Typecheck + unit tests**
+- [x] **Step 4: Typecheck + unit tests**
 
 ```bash
 bunx tsc --noEmit
@@ -498,7 +498,7 @@ bun test src/lib/terminal/terminal-tab.test.ts src/lib/files/preview-chip.test.t
 
 Expected: PASS; no remaining `centerSurface` / `filePreview` / `closePreviewState` references.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/App.tsx src/lib/terminal/terminal-tab.ts src/lib/agents/resolve-session.ts src/lib/agents/build-rows.ts src/lib/agents/*.test.ts src/lib/files/preview-chip.ts src/lib/files/preview-chip.test.ts

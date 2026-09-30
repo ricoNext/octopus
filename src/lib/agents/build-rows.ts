@@ -1,5 +1,6 @@
 import type { AppSnapshot } from "@/types";
-import type { TerminalTab } from "@/lib/terminal/terminal-tab";
+import type { CenterTab } from "@/lib/terminal/terminal-tab";
+import { isTerminalTab } from "@/lib/terminal/terminal-tab";
 import type { AgentPresence, AgentRowView } from "./types";
 import { agentDisplayName } from "./labels";
 import { findSessionLocation } from "./resolve-session";
@@ -7,7 +8,7 @@ import { findSessionLocation } from "./resolve-session";
 export function buildAgentRows(
   presenceBySession: ReadonlyMap<string, AgentPresence>,
   snapshot: AppSnapshot,
-  tabsByContext: Record<string, TerminalTab[]>,
+  tabsByContext: Record<string, CenterTab[]>,
 ): AgentRowView[] {
   const rows: AgentRowView[] = [];
   for (const presence of presenceBySession.values()) {
@@ -16,7 +17,7 @@ export function buildAgentRows(
       continue;
     }
     const tab = (tabsByContext[loc.contextId] ?? []).find((item) => item.id === loc.tabId);
-    if (!tab) {
+    if (!tab || !isTerminalTab(tab)) {
       continue;
     }
     const sessionCount = Object.keys(tab.sessionByLeafId).length;

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createLeaf } from "@/lib/terminal/pane-layout";
-import type { TerminalTab } from "@/lib/terminal/terminal-tab";
+import type { CenterTab, TerminalTab } from "@/lib/terminal/terminal-tab";
 import type { AppSnapshot } from "@/types";
 import { buildAgentRows } from "./build-rows";
 import type { AgentPresence } from "./types";
 
 function tab(partial: Partial<TerminalTab> & Pick<TerminalTab, "id" | "label" | "activeLeafId" | "sessionByLeafId">): TerminalTab {
   return {
+    kind: "terminal",
     layout: createLeaf(partial.activeLeafId),
     ...partial,
   };
@@ -54,7 +55,7 @@ describe("buildAgentRows", () => {
         { sessionId: "orphan", contextId: "proj1", agentId: "codex" },
       ],
     ]);
-    const tabsByContext: Record<string, TerminalTab[]> = {
+    const tabsByContext: Record<string, CenterTab[]> = {
       proj1: [tab({ id: "t1", label: "终端 1", activeLeafId: "l1", sessionByLeafId: { l1: "s-main" } })],
       wt1: [
         tab({

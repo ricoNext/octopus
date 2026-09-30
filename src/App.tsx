@@ -73,11 +73,16 @@ import { relPathLabel } from "@/lib/dep-link/rel-path-label";
 import { matchKeybinding } from "@/lib/keybindings";
 import { listLeaves, nextLeafId, removeLeaf, splitLeaf } from "@/lib/terminal/pane-layout";
 import {
+  closeFileTabResult,
+  createFileTab,
   createTerminalTab,
+  findFileTabByPath,
+  isFileTab,
+  isTerminalTab,
   nextTerminalTabIndex,
   migrateTabsByContext,
   sessionIdsForTab,
-  type TerminalTab,
+  type CenterTab,
 } from "@/lib/terminal/terminal-tab";
 import { isTerminalWarmRetainEnabled } from "@/lib/terminal/terminal-feature-flags";
 import { setTerminalMetric } from "@/lib/terminal/terminal-metrics";
@@ -86,11 +91,6 @@ import {
   warmMountKey,
 } from "@/lib/terminal/warm-retain";
 import { useAppUpdater, type ManualCheckStatus } from "@/lib/updater";
-import {
-  closePreviewState,
-  fileNameFromRel,
-  type CenterSurface,
-} from "@/lib/files/preview-chip";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
@@ -159,7 +159,7 @@ function recordedRelPathsForPicker(worktree: Worktree): string[] {
 type PersistedTerminalState = {
   version?: number;
   selection?: Selection;
-  tabsByContext?: Record<string, TerminalTab[]>;
+  tabsByContext?: Record<string, CenterTab[]>;
   activeTabByContext?: Record<string, string>;
 };
 
@@ -249,12 +249,6 @@ function readRightRailWidth(): number {
   }
 }
 
-type FilePreviewState = {
-  rootPath: string;
-  relPath: string;
-  content: string;
-} | null;
-
 function readPersistedTerminalState(): PersistedTerminalState {
   try {
     const raw = localStorage.getItem(TERMINAL_STATE_KEY);
@@ -313,7 +307,7 @@ export default function App() {
     () => new Map(),
   );
   const [tabActivationOrder, setTabActivationOrder] = useState<string[]>([]);
-  const [tabsByContext, setTabsByContext] = useState<Record<string, TerminalTab[]>>(
+  const [tabsByContext, setTabsByContext] = useState<Record<string, CenterTab[]>>(
     persistedState.tabsByContext ?? {},
   );
   const [activeTabByContext, setActiveTabByContext] = useState<Record<string, string>>(
@@ -338,8 +332,7 @@ export default function App() {
   const [rightRailCollapsed, setRightRailCollapsed] = useState(false);
   const rightRailShellRef = useRef<HTMLDivElement | null>(null);
   const rightRailResizePointerRef = useRef<{ pointerId: number } | null>(null);
-  const [filePreview, setFilePreview] = useState<FilePreviewState>(null);
-  const [centerSurface, setCenterSurface] = useState<CenterSurface>("terminal");
+  const [fileContentByTabId, setFileContentByTabId] = useState<Record<string, string>>({});
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
@@ -541,33 +534,62 @@ export default function App() {
         ? selectedWorktree?.path ?? null
         : null;
 
-  const handleOpenFilePreview = useCallback(
-    async (args: { rootPath: string; relPath: string }) => {
-      try {
-        const content = await api.fsReadTextFile(args.rootPath, args.relPath);
-        setFilePreview({
-          rootPath: args.rootPath,
-          relPath: args.relPath,
-          content,
-        });
-        setCenterSurface("preview");
-      } catch (error) {
-        toast.error(invokeError(error));
-      }
-    },
-    [],
-  );
-
-  const handleCloseFilePreview = useCallback(() => {
-    const next = closePreviewState(centerSurface);
-    setFilePreview(next.filePreview);
-    setCenterSurface(next.centerSurface);
-  }, [centerSurface]);
-
   const selectedTabs = selectedContextId ? tabsByContext[selectedContextId] ?? [] : [];
   const activeTabId = selectedContextId
     ? activeTabByContext[selectedContextId] ?? selectedTabs[0]?.id
     : undefined;
+  const activeCenterTab = selectedTabs.find((tab) => tab.id === activeTabId);
+  const terminalTabCount = selectedTabs.filter(isTerminalTab).length;
+
+  const activateCenterTab = useCallback(
+    async (tabId: string) => {
+      if (!selectedContextId) return;
+      const tabs = tabsByContext[selectedContextId] ?? [];
+      const tab = tabs.find((item) => item.id === tabId);
+      if (!tab) return;
+      setActiveTabByContext((current) => ({
+        ...current,
+        [selectedContextId]: tabId,
+      }));
+      if (!isFileTab(tab)) return;
+      try {
+        const content = await api.fsReadTextFile(tab.rootPath, tab.relPath);
+        setFileContentByTabId((current) => ({ ...current, [tab.id]: content }));
+      } catch (error) {
+        toast.error(invokeError(error));
+      }
+    },
+    [selectedContextId, tabsByContext],
+  );
+
+  const handleOpenFilePreview = useCallback(
+    async (args: { rootPath: string; relPath: string }) => {
+      if (!selectedContextId) return;
+      const tabs = tabsByContext[selectedContextId] ?? [];
+      const existing = findFileTabByPath(tabs, args.rootPath, args.relPath);
+      try {
+        const content = await api.fsReadTextFile(args.rootPath, args.relPath);
+        if (existing) {
+          setActiveTabByContext((current) => ({
+            ...current,
+            [selectedContextId]: existing.id,
+          }));
+          setFileContentByTabId((current) => ({ ...current, [existing.id]: content }));
+          return;
+        }
+        const tab = createFileTab(args);
+        setTabsByContext((current) => ({
+          ...current,
+          [selectedContextId]: [...(current[selectedContextId] ?? []), tab],
+        }));
+        setActiveTabByContext((current) => ({ ...current, [selectedContextId]: tab.id }));
+        setFileContentByTabId((current) => ({ ...current, [tab.id]: content }));
+      } catch (error) {
+        toast.error(invokeError(error));
+      }
+    },
+    [selectedContextId, tabsByContext],
+  );
 
   useEffect(() => {
     const viewport = tabsViewportRef.current;
@@ -749,12 +771,17 @@ export default function App() {
         return;
       }
 
-      event.preventDefault();
-
       if (action === "tab.newTerminal") {
+        event.preventDefault();
         addTerminalTab();
         return;
       }
+
+      if (!isTerminalTab(tab)) {
+        return;
+      }
+
+      event.preventDefault();
 
       if (action === "terminal.splitRight") {
         splitActivePane("vertical");
@@ -776,7 +803,11 @@ export default function App() {
         setTabsByContext((current) => ({
           ...current,
           [selectedContextId]: tabs.map((item) =>
-            item.id === tab.id ? { ...item, activeLeafId } : item,
+            item.id === tab.id
+              ? isTerminalTab(item)
+                ? { ...item, activeLeafId }
+                : item
+              : item,
           ),
         }));
         return;
@@ -809,14 +840,18 @@ export default function App() {
           const tabs = tabsByContext[selectedContextId] ?? [];
           const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
           const tab = tabs.find((item) => item.id === currentActiveTabId);
-          if (!tab) {
+          if (!tab || !isTerminalTab(tab)) {
             return;
           }
           const activeLeafId = nextLeafId(tab.layout, tab.activeLeafId);
           setTabsByContext((current) => ({
             ...current,
             [selectedContextId]: (current[selectedContextId] ?? []).map((item) =>
-              item.id === tab.id ? { ...item, activeLeafId } : item,
+              item.id === tab.id
+                ? isTerminalTab(item)
+                  ? { ...item, activeLeafId }
+                  : item
+                : item,
             ),
           }));
           break;
@@ -828,7 +863,7 @@ export default function App() {
           const tabs = tabsByContext[selectedContextId] ?? [];
           const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
           const tab = tabs.find((item) => item.id === currentActiveTabId);
-          if (!tab) {
+          if (!tab || !isTerminalTab(tab)) {
             return;
           }
           closePane(tab.activeLeafId);
@@ -887,7 +922,7 @@ export default function App() {
     const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
     const resolvedTabId = tabId ?? currentActiveTabId;
     const tab = tabs.find((item) => item.id === resolvedTabId);
-    if (!tab) {
+    if (!tab || !isTerminalTab(tab)) {
       return;
     }
     const leaves = listLeaves(tab.layout);
@@ -910,7 +945,7 @@ export default function App() {
     setTabsByContext((current) => ({
       ...current,
       [contextId]: (current[contextId] ?? []).map((item) =>
-        item.id === tab.id
+        item.id === tab.id && isTerminalTab(item)
           ? {
               ...item,
               layout,
@@ -930,7 +965,7 @@ export default function App() {
     const tabs = tabsByContext[selectedContextId] ?? [];
     const currentActiveTabId = activeTabByContext[selectedContextId] ?? tabs[0]?.id;
     const tab = tabs.find((item) => item.id === currentActiveTabId);
-    if (!tab) {
+    if (!tab || !isTerminalTab(tab)) {
       return;
     }
     splitPane(tab.activeLeafId, direction, tab.id, selectedContextId);
@@ -948,7 +983,7 @@ export default function App() {
     const currentActiveTabId = activeTabByContext[contextId] ?? tabs[0]?.id;
     const resolvedTabId = tabId ?? currentActiveTabId;
     const tab = tabs.find((item) => item.id === resolvedTabId);
-    if (!tab) {
+    if (!tab || !isTerminalTab(tab)) {
       return;
     }
     const leaves = listLeaves(tab.layout);
@@ -971,7 +1006,7 @@ export default function App() {
     setTabsByContext((current) => ({
       ...current,
       [contextId]: (current[contextId] ?? []).map((item) =>
-        item.id === tab.id
+        item.id === tab.id && isTerminalTab(item)
           ? {
               ...item,
               layout,
@@ -1004,21 +1039,35 @@ export default function App() {
             ? tabs.slice(0, index).map((tab) => tab.id)
             : tabs.slice(index + 1).map((tab) => tab.id),
     );
-    // 每个项目/分支上下文必须至少保留一个终端，避免关闭后无法再回到该终端。
-    if (idsToClose.size === 0 || idsToClose.size >= tabs.length) {
+    if (idsToClose.size === 0) {
+      return;
+    }
+    const nextTabs = tabs.filter((tab) => !idsToClose.has(tab.id));
+    // 每个项目/分支上下文必须至少保留一个终端（文件 tab 可保留）。
+    if (!nextTabs.some(isTerminalTab)) {
       return;
     }
 
     for (const id of idsToClose) {
       const tab = tabs.find((item) => item.id === id);
-      if (tab) {
+      if (tab && isTerminalTab(tab)) {
         for (const sessionId of sessionIdsForTab(tab)) {
           void api.ptyKill(sessionId).catch(() => undefined);
         }
       }
     }
-    const nextTabs = tabs.filter((tab) => !idsToClose.has(tab.id));
     setTabsByContext((current) => ({ ...current, [selectedContextId]: nextTabs }));
+    setFileContentByTabId((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const id of idsToClose) {
+        if (id in next) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
     setActiveTabByContext((current) => {
       const activeId = current[selectedContextId] ?? tabs[0]?.id;
       if (activeId && !idsToClose.has(activeId)) {
@@ -1038,12 +1087,53 @@ export default function App() {
     closeTerminalTabs(tabId, "current");
   }
 
+  function closeCenterTab(tabId: string) {
+    if (!selectedContextId) {
+      return;
+    }
+    const tabs = tabsByContext[selectedContextId] ?? [];
+    const tab = tabs.find((item) => item.id === tabId);
+    if (!tab) {
+      return;
+    }
+    if (isFileTab(tab)) {
+      const result = closeFileTabResult(tabs, tabId);
+      if (!result) {
+        return;
+      }
+      setTabsByContext((current) => ({ ...current, [selectedContextId]: result.tabs }));
+      setActiveTabByContext((current) => ({
+        ...current,
+        [selectedContextId]: result.activeTabId,
+      }));
+      setFileContentByTabId((current) => {
+        if (!(tabId in current)) return current;
+        const next = { ...current };
+        delete next[tabId];
+        return next;
+      });
+      const nextActive = result.tabs.find((item) => item.id === result.activeTabId);
+      if (nextActive && isFileTab(nextActive)) {
+        void (async () => {
+          try {
+            const content = await api.fsReadTextFile(nextActive.rootPath, nextActive.relPath);
+            setFileContentByTabId((current) => ({ ...current, [nextActive.id]: content }));
+          } catch (error) {
+            toast.error(invokeError(error));
+          }
+        })();
+      }
+      return;
+    }
+    closeTerminalTab(tabId);
+  }
+
   function openRenameTerminalTab(tabId: string) {
     if (!selectedContextId) {
       return;
     }
     const tab = (tabsByContext[selectedContextId] ?? []).find((item) => item.id === tabId);
-    if (!tab) {
+    if (!tab || !isTerminalTab(tab)) {
       return;
     }
     setTabContextMenu(null);
@@ -1068,7 +1158,7 @@ export default function App() {
       return {
         ...current,
         [renameTabTarget.contextId]: tabs.map((tab) =>
-          tab.id === renameTabTarget.tabId ? { ...tab, label } : tab,
+          tab.id === renameTabTarget.tabId && isTerminalTab(tab) ? { ...tab, label } : tab,
         ),
       };
     });
@@ -1402,7 +1492,7 @@ export default function App() {
     ...visitedMains.map((project) => ({ id: project.id, cwdId: project.id })),
   ];
   const contextMenuTab = tabContextMenu
-    ? selectedTabs.find((tab) => tab.id === tabContextMenu.tabId) ?? null
+    ? selectedTabs.find((tab) => tab.id === tabContextMenu.tabId && isTerminalTab(tab)) ?? null
     : null;
   const contextMenuTabIndex = contextMenuTab
     ? selectedTabs.findIndex((tab) => tab.id === contextMenuTab.id)
@@ -1439,7 +1529,7 @@ export default function App() {
         return {
           ...current,
           [contextId]: tabs.map((item) =>
-            item.id === tabId ? { ...item, activeLeafId: leafId } : item,
+            item.id === tabId && isTerminalTab(item) ? { ...item, activeLeafId: leafId } : item,
           ),
         };
       });
@@ -1758,7 +1848,8 @@ export default function App() {
             <div ref={tabsViewportRef} className="tabs-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto pt-1">
               <div ref={tabsContentRef} className="flex min-w-max items-end gap-1">
               {selectedTabs.map((tab) => {
-              const active = tab.id === activeTabId && centerSurface === "terminal";
+              const active = tab.id === activeTabId;
+              const isFile = isFileTab(tab);
               return (
                 <div
                   key={tab.id}
@@ -1769,66 +1860,42 @@ export default function App() {
                       ? "border-border bg-background text-foreground"
                       : "border-transparent text-muted-foreground hover:bg-background/70",
                   )}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
-                  }}
+                  onContextMenu={
+                    isFile
+                      ? undefined
+                      : (event) => {
+                          event.preventDefault();
+                          setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
+                        }
+                  }
                 >
                   <button
                     type="button"
                     className="min-w-0 flex-1 truncate text-left"
-                    onClick={() => {
-                      if (!selectedContextId) return;
-                      setActiveTabByContext((current) => ({
-                        ...current,
-                        [selectedContextId]: tab.id,
-                      }));
-                      setCenterSurface("terminal");
-                    }}
+                    title={isFile ? tab.relPath : undefined}
+                    onClick={() => void activateCenterTab(tab.id)}
                   >
                     {tab.label}
                   </button>
                   <button
                     type="button"
                     className="rounded p-0.5 text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
-                    onClick={() => closeTerminalTab(tab.id)}
-                    disabled={selectedTabs.length <= 1}
-                    aria-label={`关闭${tab.label}`}
-                    title={selectedTabs.length <= 1 ? "至少保留一个终端" : `关闭${tab.label}`}
+                    onClick={() => closeCenterTab(tab.id)}
+                    disabled={!isFile && terminalTabCount <= 1}
+                    aria-label={isFile ? "关闭预览" : `关闭${tab.label}`}
+                    title={
+                      isFile
+                        ? "关闭预览"
+                        : terminalTabCount <= 1
+                          ? "至少保留一个终端"
+                          : `关闭${tab.label}`
+                    }
                   >
                     <XIcon className="size-3.5" />
                   </button>
                 </div>
               );
               })}
-              {filePreview ? (
-                <div
-                  className={cn(
-                    "group flex h-9 max-w-48 shrink-0 items-center gap-1 rounded-t-md border border-b-0 px-2 text-sm",
-                    centerSurface === "preview"
-                      ? "border-border bg-background text-foreground"
-                      : "border-transparent text-muted-foreground hover:bg-background/70",
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 truncate text-left"
-                    title={filePreview.relPath}
-                    onClick={() => setCenterSurface("preview")}
-                  >
-                    {fileNameFromRel(filePreview.relPath)}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground group-hover:opacity-100"
-                    onClick={handleCloseFilePreview}
-                    aria-label="关闭预览"
-                    title="关闭预览"
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
-                </div>
-              ) : null}
               {!tabsOverflowing && newTerminalButton}
               </div>
             </div>
@@ -1885,7 +1952,7 @@ export default function App() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                disabled={selectedTabs.length <= 1}
+                disabled={terminalTabCount <= 1}
                 onClick={() => {
                   if (contextMenuTab) {
                     closeTerminalTabs(contextMenuTab.id, "current");
@@ -1941,13 +2008,14 @@ export default function App() {
             <div className="relative min-h-0 flex-1">
           {terminalContexts.flatMap((context) =>
             (tabsByContext[context.id] ?? []).flatMap((tab) => {
+              if (!isTerminalTab(tab)) {
+                return [];
+              }
               if (!warmMountKeys.has(warmMountKey(context.id, tab.id))) {
                 return [];
               }
               const visible =
-                centerSurface === "terminal" &&
-                selectedContextId === context.id &&
-                activeTabId === tab.id;
+                selectedContextId === context.id && activeTabId === tab.id;
               return [
                 <div
                   key={`${context.id}::${tab.id}`}
@@ -1980,7 +2048,7 @@ export default function App() {
               ];
             }),
           )}
-          {!showTerminal && centerSurface === "terminal" ? (
+          {!showTerminal && !(activeCenterTab && isFileTab(activeCenterTab)) ? (
             <div className="absolute inset-0 flex items-center justify-center p-6">
               <EmptyMain
                 project={selectedProject}
@@ -1997,13 +2065,13 @@ export default function App() {
               />
             </div>
           ) : null}
-          {filePreview && centerSurface === "preview" ? (
+          {activeCenterTab && isFileTab(activeCenterTab) ? (
             <div className="absolute inset-0">
               <FilePreview
-                rootPath={filePreview.rootPath}
-                relPath={filePreview.relPath}
-                content={filePreview.content}
-                onClose={handleCloseFilePreview}
+                rootPath={activeCenterTab.rootPath}
+                relPath={activeCenterTab.relPath}
+                content={fileContentByTabId[activeCenterTab.id] ?? ""}
+                onClose={() => closeCenterTab(activeCenterTab.id)}
               />
             </div>
           ) : null}
