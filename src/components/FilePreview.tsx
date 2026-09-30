@@ -8,7 +8,7 @@ export type FilePreviewProps = {
   relPath: string;
   content: string;
   onClose: () => void;
-  /** When false, chip is sole chrome; default true keeps header X (same as chip close). */
+  /** When false, strip tab is sole chrome; default true keeps header X (same as tab X). */
   showHeader?: boolean;
 };
 

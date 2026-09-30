@@ -515,11 +515,11 @@ git commit -m "feat(files): unified center tabs for file preview"
 
 **Interfaces:** keep existing props; optional `showHeader={false}` once strip is primary chrome (spec allows header X = same as tab X). Prefer keep header initially for parity.
 
-- [ ] **Step 1: Confirm FilePreview full-bleed**
+- [x] **Step 1: Confirm FilePreview full-bleed**
 
 Ensure parent is `absolute inset-0` / `h-full min-h-0`; `pre` scrolls. No chip-specific copy beyond `关闭预览`.
 
-- [ ] **Step 2: Final verify**
+- [x] **Step 2: Final verify**
 
 ```bash
 bunx tsc --noEmit
@@ -547,7 +547,7 @@ Checklist:
 13. Left selection change does not clear other contexts’ file tabs.
 14. File tabs: no split context menu; Agents session jump still finds terminal sessions only.
 
-- [ ] **Step 4: Commit** (if polish diffs remain)
+- [x] **Step 4: Commit** (if polish diffs remain)
 
 ```bash
 git add src/components/FilePreview.tsx src/App.tsx
