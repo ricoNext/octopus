@@ -24,7 +24,7 @@ import type { FsDirEntry } from "@/types";
 
 type FilesModuleProps = {
   rootPath?: string | null;
-  onOpenFilePreview?: (args: { rootPath: string; relPath: string }) => void;
+  onOpenFile?: (args: { rootPath: string; relPath: string }) => void;
 };
 
 function entriesToNodes(entries: FsDirEntry[], parentRel: string, depth: number): TreeNode[] {
@@ -87,7 +87,7 @@ function findNode(nodes: TreeNode[], relPath: string): TreeNode | undefined {
   return undefined;
 }
 
-export function FilesModule({ rootPath, onOpenFilePreview }: FilesModuleProps) {
+export function FilesModule({ rootPath, onOpenFile }: FilesModuleProps) {
   const [roots, setRoots] = useState<TreeNode[]>([]);
   const [rootLoading, setRootLoading] = useState(false);
   const [rootError, setRootError] = useState<string | null>(null);
@@ -151,7 +151,7 @@ export function FilesModule({ rootPath, onOpenFilePreview }: FilesModuleProps) {
     }
     if (kind !== "dir") {
       if (kind === "file") {
-        onOpenFilePreview?.({ rootPath, relPath });
+        onOpenFile?.({ rootPath, relPath });
       }
       return;
     }

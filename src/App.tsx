@@ -577,7 +577,7 @@ export default function App() {
     [selectedContextId, tabsByContext, fileContentByTabId, baselineByTabId],
   );
 
-  const handleOpenFilePreview = useCallback(
+  const handleOpenFile = useCallback(
     async (args: { rootPath: string; relPath: string }) => {
       if (!selectedContextId) return;
       const tabs = tabsByContext[selectedContextId] ?? [];
@@ -2277,7 +2277,7 @@ export default function App() {
                 agentRows={agentRows}
                 onFocusAgent={focusAgentSession}
                 filesRootPath={filesRootPath}
-                onOpenFilePreview={handleOpenFilePreview}
+                onOpenFile={handleOpenFile}
               />
             </>
           )}

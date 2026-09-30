@@ -21,7 +21,7 @@ export const RIGHT_RAIL_MODULES: readonly RightRailModule[] = [
     render: (ctx) => (
       <FilesModule
         rootPath={ctx.filesRootPath}
-        onOpenFilePreview={ctx.onOpenFilePreview}
+        onOpenFile={ctx.onOpenFile}
       />
     ),
   },

@@ -12,8 +12,8 @@ export type RightRailContext = {
   onFocusAgent?: (sessionId: string) => void;
   /** Absolute path for Files module root (main project or worktree). */
   filesRootPath?: string | null;
-  /** Open a file in the center preview (wired in Task 6). */
-  onOpenFilePreview?: (args: { rootPath: string; relPath: string }) => void;
+  /** Open a file in the center editor. */
+  onOpenFile?: (args: { rootPath: string; relPath: string }) => void;
 };
 
 export type RightRailModule = {
