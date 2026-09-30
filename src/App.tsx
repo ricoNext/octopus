@@ -29,7 +29,7 @@ import { toast } from "sonner";
 import { CopyableError } from "@/components/CopyableError";
 import { RightPanel } from "@/components/RightPanel";
 import { Sidebar } from "@/components/Sidebar";
-import { FilePreview } from "@/components/FilePreview";
+import { FileEditor } from "@/components/FileEditor";
 import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import {
@@ -333,6 +333,12 @@ export default function App() {
   const rightRailShellRef = useRef<HTMLDivElement | null>(null);
   const rightRailResizePointerRef = useRef<{ pointerId: number } | null>(null);
   const [fileContentByTabId, setFileContentByTabId] = useState<Record<string, string>>({});
+  const [baselineByTabId, setBaselineByTabId] = useState<Record<string, string>>({});
+  const [savingByTabId, setSavingByTabId] = useState<Record<string, boolean>>({});
+  const [dirtyCloseTabId, setDirtyCloseTabId] = useState<string | null>(null);
+  const [editorTheme, setEditorTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
   const [view, setView] = useState<AppView>("workspace");
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [defaultEditor, setDefaultEditor] = useState(readDefaultEditor);
@@ -369,6 +375,7 @@ export default function App() {
 
   useEffect(() => {
     applyTheme(themePreference);
+    setEditorTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
     try {
       localStorage.setItem(THEME_KEY, themePreference);
     } catch {
@@ -379,7 +386,10 @@ export default function App() {
       return;
     }
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleSystemThemeChange = () => applyTheme("system");
+    const handleSystemThemeChange = () => {
+      applyTheme("system");
+      setEditorTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    };
     mediaQuery.addEventListener("change", handleSystemThemeChange);
     return () => mediaQuery.removeEventListener("change", handleSystemThemeChange);
   }, [themePreference]);
@@ -552,14 +562,19 @@ export default function App() {
         [selectedContextId]: tabId,
       }));
       if (!isFileTab(tab)) return;
+      // Dirty buffers must survive tab switches (no autosave / no discard on activate).
+      if ((fileContentByTabId[tab.id] ?? "") !== (baselineByTabId[tab.id] ?? "")) {
+        return;
+      }
       try {
         const content = await api.fsReadTextFile(tab.rootPath, tab.relPath);
         setFileContentByTabId((current) => ({ ...current, [tab.id]: content }));
+        setBaselineByTabId((current) => ({ ...current, [tab.id]: content }));
       } catch (error) {
         toast.error(invokeError(error));
       }
     },
-    [selectedContextId, tabsByContext],
+    [selectedContextId, tabsByContext, fileContentByTabId, baselineByTabId],
   );
 
   const handleOpenFilePreview = useCallback(
@@ -567,14 +582,22 @@ export default function App() {
       if (!selectedContextId) return;
       const tabs = tabsByContext[selectedContextId] ?? [];
       const existing = findFileTabByPath(tabs, args.rootPath, args.relPath);
+      if (existing) {
+        const dirty =
+          (fileContentByTabId[existing.id] ?? "") !== (baselineByTabId[existing.id] ?? "");
+        setActiveTabByContext((current) => ({
+          ...current,
+          [selectedContextId]: existing.id,
+        }));
+        if (dirty) {
+          return;
+        }
+      }
       try {
         const content = await api.fsReadTextFile(args.rootPath, args.relPath);
         if (existing) {
-          setActiveTabByContext((current) => ({
-            ...current,
-            [selectedContextId]: existing.id,
-          }));
           setFileContentByTabId((current) => ({ ...current, [existing.id]: content }));
+          setBaselineByTabId((current) => ({ ...current, [existing.id]: content }));
           return;
         }
         const tab = createFileTab(args);
@@ -584,11 +607,12 @@ export default function App() {
         }));
         setActiveTabByContext((current) => ({ ...current, [selectedContextId]: tab.id }));
         setFileContentByTabId((current) => ({ ...current, [tab.id]: content }));
+        setBaselineByTabId((current) => ({ ...current, [tab.id]: content }));
       } catch (error) {
         toast.error(invokeError(error));
       }
     },
-    [selectedContextId, tabsByContext],
+    [selectedContextId, tabsByContext, fileContentByTabId, baselineByTabId],
   );
 
   useEffect(() => {
@@ -1057,7 +1081,7 @@ export default function App() {
       }
     }
     setTabsByContext((current) => ({ ...current, [selectedContextId]: nextTabs }));
-    setFileContentByTabId((current) => {
+    const removeClosedIds = <T,>(current: Record<string, T>): Record<string, T> => {
       let changed = false;
       const next = { ...current };
       for (const id of idsToClose) {
@@ -1067,7 +1091,10 @@ export default function App() {
         }
       }
       return changed ? next : current;
-    });
+    };
+    setFileContentByTabId((current) => removeClosedIds(current));
+    setBaselineByTabId((current) => removeClosedIds(current));
+    setSavingByTabId((current) => removeClosedIds(current));
     setActiveTabByContext((current) => {
       const activeId = current[selectedContextId] ?? tabs[0]?.id;
       if (activeId && !idsToClose.has(activeId)) {
@@ -1087,6 +1114,90 @@ export default function App() {
     closeTerminalTabs(tabId, "current");
   }
 
+  function isFileTabDirty(tabId: string) {
+    return (fileContentByTabId[tabId] ?? "") !== (baselineByTabId[tabId] ?? "");
+  }
+
+  async function saveFileTab(tabId: string): Promise<boolean> {
+    if (!selectedContextId) {
+      return false;
+    }
+    const tabs = tabsByContext[selectedContextId] ?? [];
+    const tab = tabs.find((item) => item.id === tabId);
+    if (!tab || !isFileTab(tab)) {
+      return false;
+    }
+    const content = fileContentByTabId[tabId] ?? "";
+    if (content === (baselineByTabId[tabId] ?? "")) {
+      return true;
+    }
+    setSavingByTabId((current) => ({ ...current, [tabId]: true }));
+    try {
+      await api.fsWriteTextFile(tab.rootPath, tab.relPath, content);
+      setBaselineByTabId((current) => ({ ...current, [tabId]: content }));
+      return true;
+    } catch (error) {
+      toast.error(invokeError(error));
+      return false;
+    } finally {
+      setSavingByTabId((current) => {
+        if (!(tabId in current)) return current;
+        const next = { ...current };
+        delete next[tabId];
+        return next;
+      });
+    }
+  }
+
+  function performCloseFileTab(tabId: string) {
+    if (!selectedContextId) {
+      return;
+    }
+    const tabs = tabsByContext[selectedContextId] ?? [];
+    const result = closeFileTabResult(tabs, tabId);
+    if (!result) {
+      return;
+    }
+    setTabsByContext((current) => ({ ...current, [selectedContextId]: result.tabs }));
+    setActiveTabByContext((current) => ({
+      ...current,
+      [selectedContextId]: result.activeTabId,
+    }));
+    setFileContentByTabId((current) => {
+      if (!(tabId in current)) return current;
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    setBaselineByTabId((current) => {
+      if (!(tabId in current)) return current;
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    setSavingByTabId((current) => {
+      if (!(tabId in current)) return current;
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    const nextActive = result.tabs.find((item) => item.id === result.activeTabId);
+    if (nextActive && isFileTab(nextActive)) {
+      if (isFileTabDirty(nextActive.id)) {
+        return;
+      }
+      void (async () => {
+        try {
+          const content = await api.fsReadTextFile(nextActive.rootPath, nextActive.relPath);
+          setFileContentByTabId((current) => ({ ...current, [nextActive.id]: content }));
+          setBaselineByTabId((current) => ({ ...current, [nextActive.id]: content }));
+        } catch (error) {
+          toast.error(invokeError(error));
+        }
+      })();
+    }
+  }
+
   function closeCenterTab(tabId: string) {
     if (!selectedContextId) {
       return;
@@ -1097,35 +1208,18 @@ export default function App() {
       return;
     }
     if (isFileTab(tab)) {
-      const result = closeFileTabResult(tabs, tabId);
-      if (!result) {
+      if (isFileTabDirty(tabId)) {
+        setDirtyCloseTabId(tabId);
         return;
       }
-      setTabsByContext((current) => ({ ...current, [selectedContextId]: result.tabs }));
-      setActiveTabByContext((current) => ({
-        ...current,
-        [selectedContextId]: result.activeTabId,
-      }));
-      setFileContentByTabId((current) => {
-        if (!(tabId in current)) return current;
-        const next = { ...current };
-        delete next[tabId];
-        return next;
-      });
-      const nextActive = result.tabs.find((item) => item.id === result.activeTabId);
-      if (nextActive && isFileTab(nextActive)) {
-        void (async () => {
-          try {
-            const content = await api.fsReadTextFile(nextActive.rootPath, nextActive.relPath);
-            setFileContentByTabId((current) => ({ ...current, [nextActive.id]: content }));
-          } catch (error) {
-            toast.error(invokeError(error));
-          }
-        })();
-      }
+      performCloseFileTab(tabId);
       return;
     }
     closeTerminalTab(tabId);
+  }
+
+  function handleFileEditorChange(tabId: string, next: string) {
+    setFileContentByTabId((current) => ({ ...current, [tabId]: next }));
   }
 
   function openRenameTerminalTab(tabId: string) {
@@ -1850,6 +1944,7 @@ export default function App() {
               {selectedTabs.map((tab) => {
               const active = tab.id === activeTabId;
               const isFile = isFileTab(tab);
+              const dirty = isFile && isFileTabDirty(tab.id);
               return (
                 <div
                   key={tab.id}
@@ -1871,11 +1966,18 @@ export default function App() {
                 >
                   <button
                     type="button"
-                    className="min-w-0 flex-1 truncate text-left"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left"
                     title={isFile ? tab.relPath : undefined}
                     onClick={() => void activateCenterTab(tab.id)}
                   >
-                    {tab.label}
+                    <span className="min-w-0 truncate">{tab.label}</span>
+                    {dirty ? (
+                      <span
+                        className="size-1.5 shrink-0 rounded-full bg-foreground/80"
+                        title="未保存"
+                        aria-label="未保存"
+                      />
+                    ) : null}
                   </button>
                   <button
                     type="button"
@@ -2067,12 +2169,15 @@ export default function App() {
           ) : null}
           {activeCenterTab && isFileTab(activeCenterTab) ? (
             <div className="absolute inset-0">
-              <FilePreview
+              <FileEditor
                 rootPath={activeCenterTab.rootPath}
                 relPath={activeCenterTab.relPath}
-                content={fileContentByTabId[activeCenterTab.id] ?? ""}
-                onClose={() => closeCenterTab(activeCenterTab.id)}
-                showHeader={false}
+                value={fileContentByTabId[activeCenterTab.id] ?? ""}
+                theme={editorTheme}
+                dirty={isFileTabDirty(activeCenterTab.id)}
+                saving={Boolean(savingByTabId[activeCenterTab.id])}
+                onChange={(next) => handleFileEditorChange(activeCenterTab.id, next)}
+                onSave={() => void saveFileTab(activeCenterTab.id)}
               />
             </div>
           ) : null}
@@ -2563,6 +2668,65 @@ export default function App() {
             >
               仍要取消登记
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(dirtyCloseTabId)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDirtyCloseTabId(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>未保存</AlertDialogTitle>
+            <AlertDialogDescription>
+              当前文件有未保存的更改。要保存后再关闭吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDirtyCloseTabId(null)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const tabId = dirtyCloseTabId;
+                setDirtyCloseTabId(null);
+                if (tabId) {
+                  performCloseFileTab(tabId);
+                }
+              }}
+            >
+              不保存
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const tabId = dirtyCloseTabId;
+                if (!tabId) {
+                  return;
+                }
+                void (async () => {
+                  const ok = await saveFileTab(tabId);
+                  if (!ok) {
+                    return;
+                  }
+                  setDirtyCloseTabId(null);
+                  performCloseFileTab(tabId);
+                })();
+              }}
+            >
+              保存
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
