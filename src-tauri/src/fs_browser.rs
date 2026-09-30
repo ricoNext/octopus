@@ -1,4 +1,4 @@
-//! Path-jail filesystem browser helpers (Phase 1: read_dir + read_text_file).
+//! Path-jail filesystem browser helpers (read_dir + read_text_file + write_text_file).
 
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -143,6 +143,21 @@ pub fn read_text_file(root: &Path, rel: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "不是有效的 UTF-8 文本".to_string())
 }
 
+/// Overwrite an existing regular UTF-8 text file under `root`/`rel`.
+///
+/// Uses the same path jail as [`read_text_file`]. Does not create missing files
+/// or parent directories — edit-only.
+pub fn write_text_file(root: &Path, rel: &str, content: &str) -> Result<(), String> {
+    let path = resolve_under_root(root, rel)?;
+    // Require existing regular file (edit-only); clear Chinese errors
+    let meta = fs::metadata(&path).map_err(|e| format!("无法写入文件: {e}"))?;
+    if !meta.is_file() {
+        return Err("不是普通文件，无法保存".into());
+    }
+    fs::write(&path, content.as_bytes()).map_err(|e| format!("无法写入文件: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +229,24 @@ mod tests {
         fs::write(root.join("bad.txt"), [0xFFu8, 0xFE, 0xFD]).unwrap();
         let err = read_text_file(&root, "bad.txt").unwrap_err();
         assert!(err.contains("UTF-8") || err.contains("utf"));
+    }
+
+    #[test]
+    fn write_text_ok_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"old").unwrap();
+        write_text_file(&root, "a.txt", "new").unwrap();
+        assert_eq!(read_text_file(&root, "a.txt").unwrap(), "new");
+    }
+
+    #[test]
+    fn write_rejects_escape() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        let err = write_text_file(&root, "../x.txt", "no").unwrap_err();
+        assert!(!err.is_empty());
     }
 }

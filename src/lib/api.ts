@@ -135,5 +135,7 @@ export const api = {
     invoke<FsDirEntry[]>("fs_read_dir", { rootPath, relPath }),
   fsReadTextFile: (rootPath: string, relPath: string) =>
     invoke<string>("fs_read_text_file", { rootPath, relPath }),
+  fsWriteTextFile: (rootPath: string, relPath: string, content: string) =>
+    invoke<void>("fs_write_text_file", { rootPath, relPath, content }),
 };
 

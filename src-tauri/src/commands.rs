@@ -753,6 +753,15 @@ pub fn fs_read_text_file(root_path: String, rel_path: String) -> Result<String, 
     crate::fs_browser::read_text_file(Path::new(&root_path), &rel_path)
 }
 
+#[tauri::command]
+pub fn fs_write_text_file(
+    root_path: String,
+    rel_path: String,
+    content: String,
+) -> Result<(), String> {
+    crate::fs_browser::write_text_file(Path::new(&root_path), &rel_path, &content)
+}
+
 pub fn init_state(app: &AppHandle) -> Result<(), String> {
     let dir = app
         .path()
