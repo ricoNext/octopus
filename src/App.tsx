@@ -2072,6 +2072,7 @@ export default function App() {
                 relPath={activeCenterTab.relPath}
                 content={fileContentByTabId[activeCenterTab.id] ?? ""}
                 onClose={() => closeCenterTab(activeCenterTab.id)}
+                showHeader={false}
               />
             </div>
           ) : null}
