@@ -1066,6 +1066,14 @@ export default function App() {
     if (idsToClose.size === 0) {
       return;
     }
+    const hasDirtyFileTabs = [...idsToClose].some((id) => {
+      const tab = tabs.find((item) => item.id === id);
+      return Boolean(tab && isFileTab(tab) && isFileTabDirty(id));
+    });
+    if (hasDirtyFileTabs) {
+      toast.message("有未保存的文件标签，请先保存或单独关闭后再试");
+      return;
+    }
     const nextTabs = tabs.filter((tab) => !idsToClose.has(tab.id));
     // 每个项目/分支上下文必须至少保留一个终端（文件 tab 可保留）。
     if (!nextTabs.some(isTerminalTab)) {
