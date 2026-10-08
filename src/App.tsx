@@ -336,6 +336,9 @@ export default function App() {
   const [baselineByTabId, setBaselineByTabId] = useState<Record<string, string>>({});
   const [savingByTabId, setSavingByTabId] = useState<Record<string, boolean>>({});
   const [dirtyCloseTabId, setDirtyCloseTabId] = useState<string | null>(null);
+  const savingLocksRef = useRef(new Set<string>());
+  const baselineByTabIdRef = useRef(baselineByTabId);
+  baselineByTabIdRef.current = baselineByTabId;
   const [editorTheme, setEditorTheme] = useState<"light" | "dark">(() =>
     document.documentElement.classList.contains("dark") ? "dark" : "light",
   );
@@ -563,7 +566,9 @@ export default function App() {
       }));
       if (!isFileTab(tab)) return;
       // Dirty buffers must survive tab switches (no autosave / no discard on activate).
-      if ((fileContentByTabId[tab.id] ?? "") !== (baselineByTabId[tab.id] ?? "")) {
+      // Unloaded tabs (no baseline key) are not dirty — always load.
+      const loaded = tab.id in baselineByTabId;
+      if (loaded && (fileContentByTabId[tab.id] ?? "") !== baselineByTabId[tab.id]) {
         return;
       }
       try {
@@ -583,8 +588,10 @@ export default function App() {
       const tabs = tabsByContext[selectedContextId] ?? [];
       const existing = findFileTabByPath(tabs, args.rootPath, args.relPath);
       if (existing) {
+        const loaded = existing.id in baselineByTabId;
         const dirty =
-          (fileContentByTabId[existing.id] ?? "") !== (baselineByTabId[existing.id] ?? "");
+          loaded &&
+          (fileContentByTabId[existing.id] ?? "") !== baselineByTabId[existing.id];
         setActiveTabByContext((current) => ({
           ...current,
           [selectedContextId]: existing.id,
@@ -614,6 +621,40 @@ export default function App() {
     },
     [selectedContextId, tabsByContext, fileContentByTabId, baselineByTabId],
   );
+
+  // Cold start / restored active file tab: paths persist but content/baseline do not.
+  // Auto-hydrate so an empty buffer with dirty=false cannot wipe the file on Save.
+  useEffect(() => {
+    if (!activeCenterTab || !isFileTab(activeCenterTab)) {
+      return;
+    }
+    const tab = activeCenterTab;
+    if (tab.id in baselineByTabId) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const content = await api.fsReadTextFile(tab.rootPath, tab.relPath);
+        if (cancelled) {
+          return;
+        }
+        // If activate/open already established a baseline, do not clobber a dirty buffer.
+        if (tab.id in baselineByTabIdRef.current) {
+          return;
+        }
+        setFileContentByTabId((current) => ({ ...current, [tab.id]: content }));
+        setBaselineByTabId((current) => ({ ...current, [tab.id]: content }));
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(invokeError(error));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCenterTab, baselineByTabId]);
 
   useEffect(() => {
     const viewport = tabsViewportRef.current;
@@ -1122,11 +1163,19 @@ export default function App() {
     closeTerminalTabs(tabId, "current");
   }
 
-  function isFileTabDirty(tabId: string) {
-    return (fileContentByTabId[tabId] ?? "") !== (baselineByTabId[tabId] ?? "");
+  function isFileTabLoaded(tabId: string) {
+    return tabId in baselineByTabId;
   }
 
-  async function saveFileTab(tabId: string): Promise<boolean> {
+  function isFileTabDirty(tabId: string) {
+    // Unloaded tabs are not dirty and not savable (avoids empty-buffer wipe after restart).
+    return (
+      tabId in baselineByTabId &&
+      (fileContentByTabId[tabId] ?? "") !== baselineByTabId[tabId]
+    );
+  }
+
+  async function saveFileTab(tabId: string, text?: string): Promise<boolean> {
     if (!selectedContextId) {
       return false;
     }
@@ -1135,10 +1184,21 @@ export default function App() {
     if (!tab || !isFileTab(tab)) {
       return false;
     }
-    const content = fileContentByTabId[tabId] ?? "";
-    if (content === (baselineByTabId[tabId] ?? "")) {
+    if (!(tabId in baselineByTabId)) {
+      toast.error("文件尚未加载完成，无法保存");
+      return false;
+    }
+    if (savingLocksRef.current.has(tabId)) {
+      return false;
+    }
+    const content = text !== undefined ? text : (fileContentByTabId[tabId] ?? "");
+    if (text !== undefined) {
+      setFileContentByTabId((current) => ({ ...current, [tabId]: content }));
+    }
+    if (content === baselineByTabId[tabId]) {
       return true;
     }
+    savingLocksRef.current.add(tabId);
     setSavingByTabId((current) => ({ ...current, [tabId]: true }));
     try {
       await api.fsWriteTextFile(tab.rootPath, tab.relPath, content);
@@ -1148,6 +1208,7 @@ export default function App() {
       toast.error(invokeError(error));
       return false;
     } finally {
+      savingLocksRef.current.delete(tabId);
       setSavingByTabId((current) => {
         if (!(tabId in current)) return current;
         const next = { ...current };
@@ -1992,10 +2053,10 @@ export default function App() {
                     className="rounded p-0.5 text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
                     onClick={() => closeCenterTab(tab.id)}
                     disabled={!isFile && terminalTabCount <= 1}
-                    aria-label={isFile ? "关闭预览" : `关闭${tab.label}`}
+                    aria-label={isFile ? "关闭" : `关闭${tab.label}`}
                     title={
                       isFile
-                        ? "关闭预览"
+                        ? "关闭"
                         : terminalTabCount <= 1
                           ? "至少保留一个终端"
                           : `关闭${tab.label}`
@@ -2184,8 +2245,9 @@ export default function App() {
                 theme={editorTheme}
                 dirty={isFileTabDirty(activeCenterTab.id)}
                 saving={Boolean(savingByTabId[activeCenterTab.id])}
+                loading={!isFileTabLoaded(activeCenterTab.id)}
                 onChange={(next) => handleFileEditorChange(activeCenterTab.id, next)}
-                onSave={() => void saveFileTab(activeCenterTab.id)}
+                onSave={(text) => void saveFileTab(activeCenterTab.id, text)}
               />
             </div>
           ) : null}
@@ -2718,9 +2780,10 @@ export default function App() {
             </Button>
             <Button
               type="button"
+              disabled={Boolean(dirtyCloseTabId && savingByTabId[dirtyCloseTabId])}
               onClick={() => {
                 const tabId = dirtyCloseTabId;
-                if (!tabId) {
+                if (!tabId || savingByTabId[tabId] || savingLocksRef.current.has(tabId)) {
                   return;
                 }
                 void (async () => {
@@ -2733,7 +2796,7 @@ export default function App() {
                 })();
               }}
             >
-              保存
+              {dirtyCloseTabId && savingByTabId[dirtyCloseTabId] ? "保存中…" : "保存"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

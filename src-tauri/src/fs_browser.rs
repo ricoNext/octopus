@@ -154,6 +154,9 @@ pub fn write_text_file(root: &Path, rel: &str, content: &str) -> Result<(), Stri
     if !meta.is_file() {
         return Err("不是普通文件，无法保存".into());
     }
+    if content.len() as u64 > MAX_TEXT_PREVIEW_BYTES {
+        return Err("文件过大，无法保存".into());
+    }
     fs::write(&path, content.as_bytes()).map_err(|e| format!("无法写入文件: {e}"))?;
     Ok(())
 }
@@ -248,5 +251,18 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let err = write_text_file(&root, "../x.txt", "no").unwrap_err();
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn write_rejects_oversize() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"ok").unwrap();
+        let big = "x".repeat((MAX_TEXT_PREVIEW_BYTES as usize) + 1);
+        let err = write_text_file(&root, "a.txt", &big).unwrap_err();
+        assert!(err.contains("过大") || err.contains("无法保存"));
+        // Disk must remain unchanged.
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "ok");
     }
 }
