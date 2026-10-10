@@ -2,6 +2,58 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.19] - 2026-10-10
+
+### 变更
+- fix(files): hydrate guard, save safety, write size cap for Monaco editor (aa4ee4a)
+- docs: Monaco file editor acceptance checklist (449e74b)
+- fix(files): block batch tab close when file tabs dirty (cb0e22d)
+- feat(files): dirty marker, explicit save, close confirm for Monaco tabs (371a3f3)
+- feat(files): FileEditor Monaco host with save + language (2d01e6e)
+- feat(files): map relPath extension to Monaco language (1d77871)
+- feat(fs): path-jailed write_text_file for Monaco save (a41462f)
+- docs: Monaco file editor implementation plan (4fe5fa4)
+- docs: Monaco editable file-tab design (ccd509b)
+- fix(files): drop duplicate filename in FilePreview body (47ddfd1)
+- feat(files): FilePreview polish for center file tabs (2f50ada)
+- feat(files): unified center tabs for file preview (753287a)
+- feat(tabs): CenterTab model and migrate helpers (581f1ac)
+- docs(plan): unified center tabs for file preview (f60ee7a)
+- docs(spec): unified center tabs for file preview (7baed3f)
+- feat(files): full-bleed FilePreview for sibling tab surface (7f2371a)
+- feat(files): preview as sibling center tab chip (b410ecf)
+- docs(plan): files preview sibling center tab (cc9ffbe)
+- docs(spec): files preview as sibling center tab (4e7e95a)
+- feat(files): center FilePreview + terminal|preview split (4b2684a)
+- feat(files): virtualized Files right-rail module (b2d725a)
+- feat(files): tree model helpers and react-virtual dep (3bf34e6)
+- feat(fs): expose fs_read_dir and fs_read_text_file to FE (0926b0c)
+- feat(fs): read_text_file with size and binary checks (b8c3d8d)
+- feat(fs): path jail and read_dir entries (4ff31bf)
+- docs(plan): files right-rail + center text preview Phase 1 (ae6faaa)
+- docs(spec): files right-rail + center text preview Phase 1 (38873f8)
+- style(sidebar): emphasize project names over branch rows (88e6816)
+- docs(spec): sidebar project vs row typography hierarchy (132dd76)
+- feat(dep-link): sidebar multi-path link/relink/unlink UX (9f3dbf2)
+- feat(dep-link): create dialog multi-select package link (bf93507)
+- feat(dep-link): scan and batch link/unlink tauri commands (3ff5226)
+- feat(dep-link): hydrate recorded relPaths only with migration (74b9a67)
+- feat(dep-link): relPath link/unlink primitives and batch helpers (34df11b)
+- feat(dep-link): DepLinkEntry links[] migration and aggregate status (a1e10cd)
+- feat(dep-link): scan package-level node_modules with depth/cap (91f6d01)
+- docs(plan): monorepo node_modules multi-path implementation plan (c19dbdd)
+- docs(spec): monorepo node_modules multi-path link design (e0f9e45)
+- fix(dep-link): label based-on main repo with current branch (8a1d11a)
+- fix(dep-link): preserve checkbox choice and linkedFrom on hydrate (51043d9)
+- feat(dep-link): sidebar linked/broken status icons (d25025d)
+- feat(dep-link): sidebar link/relink/unlink menus and confirms (d44d5f6)
+- feat(dep-link): create-dialog checkbox and post-create link (cf82c2b)
+- feat(dep-link): persist basedOnPath and depLink on worktrees (cf164e6)
+- feat(dep-link): tauri link/unlink/status commands and FE api (0320c6f)
+- feat(dep-link): pure node_modules symlink helpers and tests (e21a1a7)
+- docs: worktree node_modules symlink implementation plan (b892222)
+- docs: worktree node_modules symlink design (b2a6a9f)
+
 ## [0.1.18] - 2026-09-23
 
 ### 变更
