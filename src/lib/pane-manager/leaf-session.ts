@@ -8,6 +8,13 @@ import {
   terminalThemes,
 } from "@/lib/terminal/xterm-options";
 
+import { toast } from "sonner";
+
+import { agentDisplayName } from "@/lib/agents/labels";
+import {
+  consumePendingLaunch,
+  type PendingLaunch,
+} from "@/lib/agents/pending-launch";
 import { api, invokeError } from "@/lib/api";
 import { bumpTerminalMetric } from "@/lib/terminal/terminal-metrics";
 import { subscribePtyData, subscribePtyExit } from "./pty-event-bus";
@@ -234,8 +241,29 @@ export class LeafSession {
       }
       this.restoreScrollback = false;
       await api.ptyResize(this.sessionId, cols, rows);
+      // Only inject on a brand-new PTY. Warm retain reattach must not re-run the agent.
+      if (attached.isNew || attached.recovery === "fresh") {
+        const pending = consumePendingLaunch(this.sessionId);
+        if (pending) {
+          await this.injectAgentLaunch(pending);
+        }
+      }
     } catch (err) {
       console.error("ptyOpen error:", invokeError(err));
+    }
+  }
+
+  private async injectAgentLaunch(pending: PendingLaunch) {
+    try {
+      const launch = await api.agentsResolveLaunch(pending.agentId);
+      if (!pending.installed) {
+        toast.warning(
+          `未检测到 ${agentDisplayName(pending.agentId)}，仍尝试启动`,
+        );
+      }
+      await api.ptyWrite(this.sessionId, `${launch.shellLine}\n`);
+    } catch (err) {
+      toast.error(`无法启动 Agent：${invokeError(err)}`);
     }
   }
 

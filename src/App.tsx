@@ -67,11 +67,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { buildAgentRows } from "@/lib/agents/build-rows";
 import { subscribeAgentPresence } from "@/lib/agents/presence-store";
 import { findSessionLocation } from "@/lib/agents/resolve-session";
+import { queuePendingLaunch } from "@/lib/agents/pending-launch";
 import {
   enabledAgentIds as resolveEnabledAgentIds,
   filterPresenceByEnabled,
+  isAgentEnabled,
 } from "@/lib/agents/settings-resolve";
-import type { AgentPresence, AgentsStateDto, AgentUserSettings } from "@/lib/agents/types";
+import type {
+  AgentId,
+  AgentPresence,
+  AgentsStateDto,
+  AgentUserSettings,
+} from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
 import { defaultSelectedRelPaths } from "@/lib/dep-link/default-selected-rel-paths";
 import { basedOnLabel, resolveBasedOnPath } from "@/lib/dep-link/resolve-based-on";
@@ -849,7 +856,7 @@ export default function App() {
 
       if (action === "tab.newTerminal") {
         event.preventDefault();
-        addTerminalTab();
+        addTerminalTabWithDefault();
         return;
       }
 
@@ -907,7 +914,7 @@ export default function App() {
           splitActivePane("horizontal");
           break;
         case "newTerminal":
-          addTerminalTab();
+          addTerminalTabWithDefault();
           break;
         case "focusNextPane": {
           if (!selectedContextId) {
@@ -971,17 +978,33 @@ export default function App() {
     });
   }, [activeTabId, selectedContextId]);
 
-  function addTerminalTab() {
+  function addTerminalTab(launch: "blank" | AgentId = "blank") {
     if (!selectedContextId) {
       return;
     }
     const tabs = tabsByContext[selectedContextId] ?? [];
     const tab = createTerminalTab(nextTerminalTabIndex(tabs.map((item) => item.label)));
+    const sessionId = tab.sessionByLeafId[tab.activeLeafId];
+    if (launch !== "blank" && sessionId) {
+      queuePendingLaunch(sessionId, {
+        agentId: launch,
+        installed: Boolean(agentsState?.installed[launch]),
+      });
+    }
     setTabsByContext((current) => ({
       ...current,
       [selectedContextId]: [...(current[selectedContextId] ?? []), tab],
     }));
     setActiveTabByContext((current) => ({ ...current, [selectedContextId]: tab.id }));
+  }
+
+  function addTerminalTabWithDefault() {
+    const resolved = agentsState?.resolvedDefault ?? "blank";
+    if (resolved === "codex" || resolved === "codebuddy") {
+      addTerminalTab(resolved);
+      return;
+    }
+    addTerminalTab("blank");
   }
 
 
@@ -1618,18 +1641,51 @@ export default function App() {
     selection.kind === "main" && selectedProject && !selectedProject.pathMissing,
   );
   const showTerminal = showWorktreeTerminal || showMainTerminal;
+  const enabledLaunchAgents = useMemo(() => {
+    if (!agentsState) {
+      return [];
+    }
+    return agentsState.catalog.filter((entry) =>
+      isAgentEnabled(agentsState.settings, entry.id),
+    );
+  }, [agentsState]);
+
   const newTerminalButton = (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      className="my-1 shrink-0 bg-muted/30"
-      onClick={addTerminalTab}
-      disabled={!selectedContextId || !showTerminal}
-      aria-label="新建终端"
-      title="新建终端"
-    >
-      <PlusIcon />
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="my-1 shrink-0 bg-muted/30"
+          disabled={!selectedContextId || !showTerminal}
+          aria-label="新建终端"
+          title="新建终端"
+        >
+          <PlusIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" onCloseAutoFocus={(event) => event.preventDefault()}>
+        <DropdownMenuItem onClick={() => addTerminalTab("blank")}>
+          空白终端
+        </DropdownMenuItem>
+        {enabledLaunchAgents.length > 0 ? <DropdownMenuSeparator /> : null}
+        {enabledLaunchAgents.map((entry) => {
+          const agentId = entry.id as AgentId;
+          const installed = Boolean(agentsState?.installed[entry.id]);
+          return (
+            <DropdownMenuItem
+              key={entry.id}
+              onClick={() => addTerminalTab(agentId)}
+            >
+              {entry.label}
+              {!installed ? (
+                <span className="ml-auto text-xs text-muted-foreground">未检测到</span>
+              ) : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
   const warmRetainEnabled = isTerminalWarmRetainEnabled();
   const warmMountKeys = useMemo(
