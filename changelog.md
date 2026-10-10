@@ -2,6 +2,18 @@
 
 所有重要变更都会记录在这里。
 
+## [0.1.20] - 2026-10-10
+
+### 变更
+- fix(agents): default fallback toasts and Agents settings polish (93b2e47)
+- feat(agents): new-terminal dropdown launches configured agent into PTY (785079c)
+- feat(agents): Settings → Agents page for catalog and overrides (ef28ba4)
+- feat(agents): filter right-rail presence by enabled catalog ids (a948f0b)
+- feat(agents): persist agent-settings.json and Tauri agents_* commands (0131377)
+- feat(agents): catalog resolve, enabled set, and launch line helpers (5df2664)
+- docs: agents settings MVP implementation plan (8ed62e6)
+- docs: agents settings MVP design (75b38dc)
+
 ## [0.1.19] - 2026-10-10
 
 ### 变更
