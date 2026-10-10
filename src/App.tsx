@@ -20,6 +20,7 @@ import {
   Code2Icon,
   Columns2Icon,
   InfoIcon,
+  BotIcon,
   RefreshCwIcon,
   Rows2Icon,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { toast } from "sonner";
 
 import { CopyableError } from "@/components/CopyableError";
+import { AgentsSettingsSection, defaultAgentLabel } from "@/components/settings/AgentsSettingsSection";
 import { RightPanel } from "@/components/RightPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { FileEditor } from "@/components/FileEditor";
@@ -69,7 +71,7 @@ import {
   enabledAgentIds as resolveEnabledAgentIds,
   filterPresenceByEnabled,
 } from "@/lib/agents/settings-resolve";
-import type { AgentPresence } from "@/lib/agents/types";
+import type { AgentPresence, AgentsStateDto, AgentUserSettings } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
 import { defaultSelectedRelPaths } from "@/lib/dep-link/default-selected-rel-paths";
 import { basedOnLabel, resolveBasedOnPath } from "@/lib/dep-link/resolve-based-on";
@@ -313,6 +315,8 @@ export default function App() {
   const [enabledAgentIds, setEnabledAgentIds] = useState<ReadonlySet<string>>(
     () => new Set(["codex", "codebuddy"]),
   );
+  const [agentsState, setAgentsState] = useState<AgentsStateDto | null>(null);
+  const [agentsBusy, setAgentsBusy] = useState(false);
   const [tabActivationOrder, setTabActivationOrder] = useState<string[]>([]);
   const [tabsByContext, setTabsByContext] = useState<Record<string, CenterTab[]>>(
     persistedState.tabsByContext ?? {},
@@ -1671,15 +1675,20 @@ export default function App() {
 
   useEffect(() => subscribeAgentPresence(setPresenceMap), []);
 
+  const applyAgentsState = useCallback((state: AgentsStateDto) => {
+    setAgentsState(state);
+    setEnabledAgentIds(
+      new Set(resolveEnabledAgentIds(state.settings, state.catalog.map((c) => c.id))),
+    );
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void api
       .agentsGetState()
       .then((state) => {
         if (cancelled) return;
-        setEnabledAgentIds(
-          new Set(resolveEnabledAgentIds(state.settings, state.catalog.map((c) => c.id))),
-        );
+        applyAgentsState(state);
       })
       .catch(() => {
         // Settings load is best-effort; host filter still applies.
@@ -1687,7 +1696,38 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyAgentsState]);
+
+  const handleAgentsSave = useCallback(
+    async (settings: AgentUserSettings) => {
+      const submittedDefault = settings.defaultAgent;
+      setAgentsBusy(true);
+      try {
+        const next = await api.agentsSaveSettings(settings);
+        applyAgentsState(next);
+        if (next.resolvedDefault !== submittedDefault) {
+          toast.message(`默认 Agent 已改为 ${defaultAgentLabel(next.resolvedDefault)}`);
+        }
+      } catch (error) {
+        toast.error(invokeError(error));
+      } finally {
+        setAgentsBusy(false);
+      }
+    },
+    [applyAgentsState],
+  );
+
+  const handleAgentsRefresh = useCallback(async () => {
+    setAgentsBusy(true);
+    try {
+      const next = await api.agentsRefreshDetection();
+      applyAgentsState(next);
+    } catch (error) {
+      toast.error(invokeError(error));
+    } finally {
+      setAgentsBusy(false);
+    }
+  }, [applyAgentsState]);
 
   const agentRows = useMemo(() => {
     const filtered = filterPresenceByEnabled(presenceMap, enabledAgentIds);
@@ -2015,6 +2055,10 @@ export default function App() {
             currentVersion={updater.currentVersion}
             manualCheckStatus={updater.manualStatus}
             onCheckUpdate={() => void updater.check("manual")}
+            agentsState={agentsState}
+            agentsBusy={agentsBusy}
+            onAgentsSave={handleAgentsSave}
+            onAgentsRefresh={handleAgentsRefresh}
           />
         ) : (
           <>
@@ -2913,6 +2957,10 @@ function SettingsPage({
   currentVersion,
   manualCheckStatus,
   onCheckUpdate,
+  agentsState,
+  agentsBusy,
+  onAgentsSave,
+  onAgentsRefresh,
 }: {
   onBack: () => void;
   themePreference: ThemePreference;
@@ -2922,8 +2970,14 @@ function SettingsPage({
   currentVersion: string;
   manualCheckStatus: ManualCheckStatus;
   onCheckUpdate: () => void;
+  agentsState: AgentsStateDto | null;
+  agentsBusy: boolean;
+  onAgentsSave: (settings: AgentUserSettings) => void | Promise<void>;
+  onAgentsRefresh: () => void | Promise<void>;
 }) {
-  const [activeSection, setActiveSection] = useState<"appearance" | "editor" | "about">("appearance");
+  const [activeSection, setActiveSection] = useState<"appearance" | "editor" | "agents" | "about">(
+    "appearance",
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -2976,6 +3030,20 @@ function SettingsPage({
             >
               <Code2Icon className="size-4 shrink-0" />
               <span>编辑器</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "mt-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                activeSection === "agents"
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground",
+              )}
+              onClick={() => setActiveSection("agents")}
+              aria-current={activeSection === "agents" ? "page" : undefined}
+            >
+              <BotIcon className="size-4 shrink-0" />
+              <span>Agents</span>
             </button>
             <button
               type="button"
@@ -3076,6 +3144,14 @@ function SettingsPage({
                   </p>
                 </div>
               </section>
+            ) : null}
+            {activeSection === "agents" ? (
+              <AgentsSettingsSection
+                state={agentsState}
+                busy={agentsBusy}
+                onChange={onAgentsSave}
+                onRefresh={onAgentsRefresh}
+              />
             ) : null}
             {activeSection === "about" ? (
               <section className="space-y-4">
