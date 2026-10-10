@@ -1,5 +1,6 @@
 import {
   ChevronRightIcon,
+  ListTodoIcon,
   ChevronDownIcon,
   FolderOpenIcon,
   GitBranchIcon,
@@ -91,6 +92,8 @@ type SidebarProps = {
   onUnlinkNodeModules: (worktree: Worktree) => void;
   settingsActive?: boolean;
   onOpenSettings: () => void;
+  onOpenTasks: () => void;
+  tasksActive?: boolean;
   collapsed?: boolean;
   onToggleCollapse: () => void;
   onListBranchOptions: (projectId: string) => Promise<BranchOptions>;
@@ -292,6 +295,8 @@ export function Sidebar({
   onUnlinkNodeModules,
   settingsActive = false,
   onOpenSettings,
+  onOpenTasks,
+  tasksActive = false,
   collapsed = false,
   onToggleCollapse,
   onListBranchOptions,
@@ -427,6 +432,7 @@ export function Sidebar({
             </Button>
           </div>
           <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+            <div className="px-3 pt-3"><button onClick={onOpenTasks} aria-current={tasksActive ? "page" : undefined} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm text-left", tasksActive ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE)}><ListTodoIcon className="size-4" /> 任务看板</button></div>
             <div className="min-w-0 w-full space-y-4 overflow-hidden p-3 pr-1">
               <div className="flex items-center justify-between px-1">
                 <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">

@@ -32,6 +32,8 @@ import { AgentsSettingsSection, defaultAgentLabel } from "@/components/settings/
 import { RightPanel } from "@/components/RightPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { FileEditor } from "@/components/FileEditor";
+import { TaskBoard } from "@/components/tasks/TaskBoard";
+import { TaskExitDialog } from "@/components/tasks/TaskExitDialog";
 import { TerminalWorkspace } from "@/components/TerminalWorkspace";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import {
@@ -119,7 +121,7 @@ import type {
 const emptySnapshot: AppSnapshot = { projects: [], worktrees: [] };
 
 type TabCloseMode = "current" | "others" | "left" | "right";
-type AppView = "workspace" | "settings";
+type AppView = "workspace" | "settings" | "tasks";
 
 type TabContextMenu = {
   tabId: string;
@@ -843,7 +845,7 @@ export default function App() {
         return;
       }
 
-      if (!selectedContextId) {
+      if (view !== "workspace" || !selectedContextId) {
         return;
       }
 
@@ -1973,7 +1975,8 @@ export default function App() {
 
   return (
     <div className="relative flex h-full min-h-0 bg-background text-foreground">
-      {view === "workspace" ? (
+      <TaskExitDialog />
+      {view !== "settings" ? (
         <div
           ref={sidebarShellRef}
           className={cn(
@@ -2025,6 +2028,8 @@ export default function App() {
           onListBranchOptions={(projectId) => api.listBranchOptions(projectId)}
           onSwitchMainBranch={handleSwitchMainBranch}
           onOpenSettings={() => setView("settings")}
+          onOpenTasks={() => { setSidebarCollapsed(false); setView("tasks"); }}
+          tasksActive={view === "tasks"}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(true)}
         />
@@ -2120,6 +2125,8 @@ export default function App() {
             onAgentsSave={handleAgentsSave}
             onAgentsRefresh={handleAgentsRefresh}
           />
+        ) : view === "tasks" ? (
+          <TaskBoard agents={agentsState} theme={editorTheme} onSettings={() => setView("settings")} />
         ) : (
           <>
             <div

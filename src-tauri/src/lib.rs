@@ -10,9 +10,10 @@ mod paths;
 mod pty;
 mod store;
 mod workspace;
+mod tasks;
 
 use tauri::menu::{Menu, MenuItem, Submenu};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             commands::init_state(app.handle()).map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
+            tasks::init(app.handle()).map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
 
             let split_right = MenuItem::with_id(
                 app,
@@ -88,7 +90,25 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(manager) = window.app_handle().try_state::<tasks::TaskManager>() {
+                    if !manager.exit_allowed.load(std::sync::atomic::Ordering::SeqCst) && manager.has_running() {
+                        api.prevent_close();
+                        let _ = window.emit("tasks-exit-requested", ());
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            tasks::tasks_list,
+            tasks::tasks_save,
+            tasks::tasks_run,
+            tasks::tasks_message,
+            tasks::tasks_stop,
+            tasks::tasks_complete,
+            tasks::tasks_labels,
+            tasks::tasks_exit,
             commands::load_snapshot,
             commands::inspect_repo,
             commands::default_worktree_parent,
@@ -128,9 +148,23 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("启动应用失败")
-        .run(|_, _| {});
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if let Some(manager) = app.try_state::<tasks::TaskManager>() {
+                    if !manager.exit_allowed.load(std::sync::atomic::Ordering::SeqCst) && manager.has_running() {
+                        api.prevent_exit();
+                        if let Some(window) = app.get_webview_window("main") { let _ = window.show(); let _ = window.set_focus(); }
+                        let _ = app.emit("tasks-exit-requested", ());
+                    }
+                }
+            }
+        });
 }
 
 pub fn run_terminal_daemon() {
     pty::run_terminal_daemon();
+}
+
+pub fn run_task_worker(root: &std::path::Path, id: &str, run_id: &str) {
+    tasks::run_worker(root, id, run_id);
 }
