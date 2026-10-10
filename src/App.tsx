@@ -1761,11 +1761,15 @@ export default function App() {
       try {
         const next = await api.agentsSaveSettings(settings);
         applyAgentsState(next);
+        // Disabling the current default (or other invalid default) coalesces on the host;
+        // keep the Select on resolvedDefault and notify when it moved.
         if (next.resolvedDefault !== submittedDefault) {
           toast.message(`默认 Agent 已改为 ${defaultAgentLabel(next.resolvedDefault)}`);
         }
+        return next;
       } catch (error) {
         toast.error(invokeError(error));
+        return undefined;
       } finally {
         setAgentsBusy(false);
       }
@@ -3028,7 +3032,9 @@ function SettingsPage({
   onCheckUpdate: () => void;
   agentsState: AgentsStateDto | null;
   agentsBusy: boolean;
-  onAgentsSave: (settings: AgentUserSettings) => void | Promise<void>;
+  onAgentsSave: (
+    settings: AgentUserSettings,
+  ) => void | Promise<void | AgentsStateDto | undefined>;
   onAgentsRefresh: () => void | Promise<void>;
 }) {
   const [activeSection, setActiveSection] = useState<"appearance" | "editor" | "agents" | "about">(

@@ -37,6 +37,22 @@ export function resolveDefaultAgent(
   return enabled[0] ?? "blank";
 }
 
+
+/** Rewrite defaultAgent to the resolved fallback when it points at a disabled/unknown id. */
+export function coalesceDefaultAgent(
+  settings: AgentUserSettings,
+  catalogIds: readonly string[] = CATALOG_IDS,
+): { settings: AgentUserSettings; changed: boolean } {
+  const resolved = resolveDefaultAgent(settings, catalogIds);
+  if (resolved === settings.defaultAgent) {
+    return { settings, changed: false };
+  }
+  return {
+    settings: { ...settings, defaultAgent: resolved },
+    changed: true,
+  };
+}
+
 /** Drop presence entries whose agentId is not in the enabled set. */
 export function filterPresenceByEnabled(
   presenceBySession: ReadonlyMap<string, AgentPresence>,

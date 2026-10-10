@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  coalesceDefaultAgent,
   enabledAgentIds,
   filterPresenceByEnabled,
   isAgentEnabled,
@@ -45,6 +46,35 @@ describe("settings-resolve", () => {
     expect(
       resolveDefaultAgent(settings({ defaultAgent: "blank", disabledAgents: [] })),
     ).toBe("blank");
+  });
+
+  it("resolveDefaultAgent falls back for unknown default id", () => {
+    expect(
+      resolveDefaultAgent(
+        settings({ defaultAgent: "unknown-agent", disabledAgents: [] }),
+      ),
+    ).toBe("codex");
+  });
+
+  it("coalesceDefaultAgent rewrites stored default to match Rust fallback", () => {
+    const disabled = settings({
+      defaultAgent: "codebuddy",
+      disabledAgents: ["codebuddy"],
+    });
+    const coalesced = coalesceDefaultAgent(disabled);
+    expect(coalesced.changed).toBe(true);
+    expect(coalesced.settings.defaultAgent).toBe("codex");
+
+    const both = settings({
+      defaultAgent: "codex",
+      disabledAgents: ["codex", "codebuddy"],
+    });
+    const toBlank = coalesceDefaultAgent(both);
+    expect(toBlank.changed).toBe(true);
+    expect(toBlank.settings.defaultAgent).toBe("blank");
+
+    const ok = settings({ defaultAgent: "codex", disabledAgents: [] });
+    expect(coalesceDefaultAgent(ok).changed).toBe(false);
   });
 
   it("filterPresenceByEnabled drops disabled ids", () => {

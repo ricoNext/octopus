@@ -64,7 +64,10 @@ function effectiveOverride(
 type AgentsSettingsSectionProps = {
   state: AgentsStateDto | null;
   busy?: boolean;
-  onChange: (settings: AgentUserSettings) => void | Promise<void>;
+  /** Persist settings; return the saved AgentsStateDto so Reset can refresh drafts from server. */
+  onChange: (
+    settings: AgentUserSettings,
+  ) => void | Promise<void | AgentsStateDto | undefined>;
   onRefresh: () => void | Promise<void>;
 };
 
@@ -122,13 +125,26 @@ export function AgentsSettingsSection({
     );
   }
 
-  const patchSettings = (patch: Partial<AgentUserSettings>) => {
-    void onChange({
+  const patchSettings = async (patch: Partial<AgentUserSettings>) => {
+    return onChange({
       ...settings,
       ...patch,
       agentOverrides: patch.agentOverrides ?? settings.agentOverrides,
       disabledAgents: patch.disabledAgents ?? settings.disabledAgents,
     });
+  };
+
+  const applyDraftFromState = (id: string, next: AgentsStateDto, fallback: CatalogEntryDto) => {
+    const entry = next.catalog.find((item) => item.id === id) ?? fallback;
+    const effective = effectiveOverride(entry, next.settings.agentOverrides[id]);
+    setDraftById((drafts) => ({
+      ...drafts,
+      [id]: {
+        cmd: effective.cmd,
+        argsText: formatArgs(effective.args),
+        envText: formatEnv(effective.env),
+      },
+    }));
   };
 
   const setEnabled = (id: string, enabled: boolean) => {
@@ -142,11 +158,11 @@ export function AgentsSettingsSection({
     const disabledAgents = catalog
       .map((entry) => entry.id)
       .filter((catalogId) => disabled.has(catalogId.toLowerCase()));
-    patchSettings({ disabledAgents });
+    void patchSettings({ disabledAgents });
   };
 
   const setDefaultAgent = (value: string) => {
-    patchSettings({ defaultAgent: value });
+    void patchSettings({ defaultAgent: value });
   };
 
   const saveOverrideDraft = (id: string) => {
@@ -158,12 +174,18 @@ export function AgentsSettingsSection({
       args: parseArgsText(draft.argsText),
       env: parseEnvText(draft.envText),
     };
-    patchSettings({ agentOverrides: nextOverrides });
+    void patchSettings({ agentOverrides: nextOverrides });
   };
 
-  const resetOverride = (id: string, entry: CatalogEntryDto) => {
+  const resetOverride = async (id: string, entry: CatalogEntryDto) => {
     const nextOverrides = { ...settings.agentOverrides };
     delete nextOverrides[id];
+    const result = await patchSettings({ agentOverrides: nextOverrides });
+    if (result && typeof result === "object" && "catalog" in result) {
+      applyDraftFromState(id, result, entry);
+      return;
+    }
+    // Fallback when parent does not return state: use local catalog defaults.
     setDraftById((drafts) => ({
       ...drafts,
       [id]: {
@@ -172,7 +194,6 @@ export function AgentsSettingsSection({
         envText: formatEnv(entry.defaultEnv),
       },
     }));
-    patchSettings({ agentOverrides: nextOverrides });
   };
 
   return (
@@ -373,7 +394,7 @@ export function AgentsSettingsSection({
                       variant="outline"
                       size="sm"
                       disabled={busy}
-                      onClick={() => resetOverride(entry.id, entry)}
+                      onClick={() => void resetOverride(entry.id, entry)}
                     >
                       重置
                     </Button>
