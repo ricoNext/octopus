@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -100,15 +100,61 @@ impl WireMessage {
 pub struct PtyManager {
     client: Arc<DaemonClient>,
     contexts: Arc<Mutex<HashMap<String, String>>>,
+    app: AppHandle,
 }
 
 impl PtyManager {
-    pub fn new(app: &AppHandle, app_data_dir: &Path) -> Result<Self, String> {
-        let client = DaemonClient::connect_or_start(app, app_data_dir)?;
+    pub fn new(
+        app: &AppHandle,
+        app_data_dir: &Path,
+        enabled_agent_ids: HashSet<String>,
+    ) -> Result<Self, String> {
+        let client = DaemonClient::connect_or_start(app, app_data_dir, enabled_agent_ids)?;
         Ok(Self {
             client: Arc::new(client),
             contexts: Arc::new(Mutex::new(HashMap::new())),
+            app: app.clone(),
         })
+    }
+
+    /// Replace the enabled catalog id set used when forwarding presence to the FE.
+    pub fn set_enabled_agent_ids(&self, enabled: HashSet<String>) {
+        if let Ok(mut guard) = self.client.enabled_agent_ids.lock() {
+            *guard = enabled;
+        }
+    }
+
+    /// Re-emit cached presence filtered by the current enabled set so the right rail
+    /// clears newly disabled agents immediately (and restores on re-enable).
+    pub fn sync_presence_visibility(&self) {
+        let snapshot: Vec<AgentPresenceItem> = self
+            .client
+            .presence
+            .lock()
+            .map(|cache| cache.values().cloned().collect())
+            .unwrap_or_default();
+        let enabled = self
+            .client
+            .enabled_agent_ids
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        for item in snapshot {
+            let visible = enabled.contains(&item.agent_id);
+            let _ = self.app.emit(
+                "agent-presence",
+                AgentPresenceEvent {
+                    session_id: item.session_id,
+                    context_id: item.context_id,
+                    agent_id: if visible {
+                        Some(item.agent_id)
+                    } else {
+                        None
+                    },
+                    process_name: if visible { item.process_name } else { None },
+                },
+            );
+        }
     }
 
     pub fn open(
@@ -154,11 +200,12 @@ impl PtyManager {
     }
 
     pub fn list_agent_presence(&self) -> Result<Vec<AgentPresenceItem>, String> {
-        match self.client.request("listAgentPresence", json!({})) {
+        let items = match self.client.request("listAgentPresence", json!({})) {
             Ok(value) => serde_json::from_value(value)
-                .map_err(|err| format!("终端 daemon 返回格式错误：{err}")),
-            Err(_) => Ok(self.client.cached_presence()),
-        }
+                .map_err(|err| format!("终端 daemon 返回格式错误：{err}"))?,
+            Err(_) => self.client.cached_presence_raw(),
+        };
+        Ok(self.client.filter_presence_items(items))
     }
 
     pub fn kill_context(&self, context_id: &str) {
@@ -194,11 +241,18 @@ struct DaemonClient {
     pending: Arc<Mutex<HashMap<String, Arc<(Mutex<Option<Result<Value, String>>>, Condvar)>>>>,
     next_id: AtomicU64,
     /// Last agentPresence per session, including connect-time replay (before FE listens).
+    /// Stores daemon truth (full catalog); FE visibility is filtered by enabled_agent_ids.
     presence: Arc<Mutex<HashMap<String, AgentPresenceItem>>>,
+    /// Catalog agent ids currently enabled in settings (host-side presence filter).
+    enabled_agent_ids: Arc<Mutex<HashSet<String>>>,
 }
 
 impl DaemonClient {
-    fn connect_or_start(app: &AppHandle, app_data_dir: &Path) -> Result<Self, String> {
+    fn connect_or_start(
+        app: &AppHandle,
+        app_data_dir: &Path,
+        enabled_agent_ids: HashSet<String>,
+    ) -> Result<Self, String> {
         let socket_path = app_data_dir.join("terminal-daemon.sock");
         let token_path = app_data_dir.join("terminal-daemon.token");
         fs::create_dir_all(app_data_dir).map_err(|err| format!("无法创建终端 daemon 目录：{err}"))?;
@@ -227,6 +281,7 @@ impl DaemonClient {
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
             presence: Arc::new(Mutex::new(HashMap::new())),
+            enabled_agent_ids: Arc::new(Mutex::new(enabled_agent_ids)),
         };
         client.start_reader(app.clone())?;
         Ok(client)
@@ -241,6 +296,7 @@ impl DaemonClient {
             .map_err(|err| format!("无法读取终端 daemon：{err}"))?;
         let pending = self.pending.clone();
         let presence = self.presence.clone();
+        let enabled_agent_ids = self.enabled_agent_ids.clone();
         thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
@@ -296,6 +352,7 @@ impl DaemonClient {
                                             .get("processName")
                                             .and_then(Value::as_str)
                                             .map(ToOwned::to_owned);
+                                        // Cache daemon truth (full catalog match).
                                         if let Ok(mut cache) = presence.lock() {
                                             match &agent_id {
                                                 Some(id) if !id.is_empty() => {
@@ -314,13 +371,28 @@ impl DaemonClient {
                                                 }
                                             }
                                         }
+                                        // Host filter: disabled ids look like "left" to the FE.
+                                        let (emit_id, emit_name) = match &agent_id {
+                                            Some(id) if !id.is_empty() => {
+                                                let visible = enabled_agent_ids
+                                                    .lock()
+                                                    .map(|e| e.contains(id))
+                                                    .unwrap_or(true);
+                                                if visible {
+                                                    (agent_id.clone(), process_name.clone())
+                                                } else {
+                                                    (None, None)
+                                                }
+                                            }
+                                            _ => (None, None),
+                                        };
                                         let _ = app.emit(
                                             "agent-presence",
                                             AgentPresenceEvent {
                                                 session_id,
                                                 context_id,
-                                                agent_id,
-                                                process_name,
+                                                agent_id: emit_id,
+                                                process_name: emit_name,
                                             },
                                         );
                                     }
@@ -374,11 +446,23 @@ impl DaemonClient {
     }
 
     /// Send a daemon command without waiting for its response (Orca-style keystroke path).
-    fn cached_presence(&self) -> Vec<AgentPresenceItem> {
+    fn cached_presence_raw(&self) -> Vec<AgentPresenceItem> {
         self.presence
             .lock()
             .map(|cache| cache.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    fn filter_presence_items(&self, items: Vec<AgentPresenceItem>) -> Vec<AgentPresenceItem> {
+        let enabled = self
+            .enabled_agent_ids
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        items
+            .into_iter()
+            .filter(|item| enabled.contains(&item.agent_id))
+            .collect()
     }
 
         fn notify(&self, command: &str, payload: Value) -> Result<(), String> {

@@ -65,6 +65,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { buildAgentRows } from "@/lib/agents/build-rows";
 import { subscribeAgentPresence } from "@/lib/agents/presence-store";
 import { findSessionLocation } from "@/lib/agents/resolve-session";
+import {
+  enabledAgentIds as resolveEnabledAgentIds,
+  filterPresenceByEnabled,
+} from "@/lib/agents/settings-resolve";
 import type { AgentPresence } from "@/lib/agents/types";
 import { api, invokeError } from "@/lib/api";
 import { defaultSelectedRelPaths } from "@/lib/dep-link/default-selected-rel-paths";
@@ -305,6 +309,9 @@ export default function App() {
   const [visited, setVisited] = useState<string[]>([]);
   const [presenceMap, setPresenceMap] = useState<ReadonlyMap<string, AgentPresence>>(
     () => new Map(),
+  );
+  const [enabledAgentIds, setEnabledAgentIds] = useState<ReadonlySet<string>>(
+    () => new Set(["codex", "codebuddy"]),
   );
   const [tabActivationOrder, setTabActivationOrder] = useState<string[]>([]);
   const [tabsByContext, setTabsByContext] = useState<Record<string, CenterTab[]>>(
@@ -1664,10 +1671,28 @@ export default function App() {
 
   useEffect(() => subscribeAgentPresence(setPresenceMap), []);
 
-  const agentRows = useMemo(
-    () => buildAgentRows(presenceMap, snapshot, tabsByContext),
-    [presenceMap, snapshot, tabsByContext],
-  );
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .agentsGetState()
+      .then((state) => {
+        if (cancelled) return;
+        setEnabledAgentIds(
+          new Set(resolveEnabledAgentIds(state.settings, state.catalog.map((c) => c.id))),
+        );
+      })
+      .catch(() => {
+        // Settings load is best-effort; host filter still applies.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const agentRows = useMemo(() => {
+    const filtered = filterPresenceByEnabled(presenceMap, enabledAgentIds);
+    return buildAgentRows(filtered, snapshot, tabsByContext);
+  }, [presenceMap, enabledAgentIds, snapshot, tabsByContext]);
 
   const focusAgentSession = useCallback(
     (sessionId: string) => {

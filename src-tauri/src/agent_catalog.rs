@@ -1,7 +1,7 @@
 //! Built-in agent catalog, enable/disable, override merge, and launch-line helpers.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -261,6 +261,26 @@ pub fn build_shell_line(cmd: &str, args: &[String], env: &BTreeMap<String, Strin
     }
 }
 
+
+/// Whether a presence `agent_id` string should be shown given user settings.
+/// Unknown ids are never visible.
+/// Used by tests and as the spec-facing pure check; runtime host filter uses [`enabled_id_set`].
+#[allow(dead_code)]
+pub fn presence_visible(agent_id: &str, settings: &AgentUserSettings) -> bool {
+    match parse_catalog_id(agent_id) {
+        Some(id) => is_enabled(settings, id),
+        None => false,
+    }
+}
+
+/// Enabled catalog ids as a string set (for host presence filtering).
+pub fn enabled_id_set(settings: &AgentUserSettings) -> HashSet<String> {
+    enabled_ids(settings)
+        .into_iter()
+        .map(|id| id.as_str().to_string())
+        .collect()
+}
+
 /// PATH lookup for a bare command name; absolute paths use `Path::is_file`.
 pub fn detect_installed(detect_cmd: &str) -> bool {
     let path = Path::new(detect_cmd);
@@ -402,5 +422,19 @@ mod tests {
         );
         assert_eq!(parse_catalog_id("blank"), None);
         assert_eq!(parse_catalog_id("nope"), None);
+    }
+
+    #[test]
+    fn presence_visible_respects_enabled_set() {
+        let settings = settings_with("codex", &["codebuddy"]);
+        assert!(presence_visible("codex", &settings));
+        assert!(!presence_visible("codebuddy", &settings));
+        assert!(!presence_visible("unknown", &settings));
+        assert!(!presence_visible("blank", &settings));
+
+        let all_disabled = settings_with("blank", &["codex", "codebuddy"]);
+        assert!(!presence_visible("codex", &all_disabled));
+        assert_eq!(enabled_id_set(&settings), HashSet::from(["codex".into()]));
+        assert!(enabled_id_set(&all_disabled).is_empty());
     }
 }

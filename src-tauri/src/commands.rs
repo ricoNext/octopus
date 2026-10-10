@@ -138,9 +138,15 @@ pub fn agents_save_settings(
     let mut settings = settings;
     agent_catalog::coalesce_default_on_disable(&mut settings);
     agent_settings::save(&state.agent_settings_path, &settings)?;
+    let enabled = agent_catalog::enabled_id_set(&settings);
     let mut guard = locked_agent_settings(&state)?;
     *guard = settings;
-    Ok(build_agents_state(&guard))
+    let dto = build_agents_state(&guard);
+    drop(guard);
+    // Update host filter and immediately clear/restore right-rail rows.
+    state.ptys.set_enabled_agent_ids(enabled);
+    state.ptys.sync_presence_visibility();
+    Ok(dto)
 }
 
 #[tauri::command]
@@ -921,10 +927,11 @@ pub fn init_state(app: &AppHandle) -> Result<(), String> {
     let mut agent_settings_value = agent_settings::load(&agent_settings_path);
     let _ = agent_catalog::coalesce_default_on_disable(&mut agent_settings_value);
     let _ = agent_settings::save(&agent_settings_path, &agent_settings_value);
+    let enabled_agent_ids = agent_catalog::enabled_id_set(&agent_settings_value);
     app.manage(AppState {
         store: Mutex::new(store),
         creating: Mutex::new(HashSet::new()),
-        ptys: PtyManager::new(app, &dir)?,
+        ptys: PtyManager::new(app, &dir, enabled_agent_ids)?,
         store_path,
         agent_settings_path,
         agent_settings: Mutex::new(agent_settings_value),
