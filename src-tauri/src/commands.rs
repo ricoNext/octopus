@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::agent_catalog::{self, AgentUserSettings, CatalogEntry};
+use crate::agent_settings;
 use crate::dep_link::{self, BatchUnlinkNoticeKind, LinkError, ProbeStatus};
 use crate::git::same_path;
 use crate::models::{
@@ -21,6 +23,149 @@ pub struct AppState {
     pub creating: Mutex<HashSet<String>>,
     pub ptys: PtyManager,
     pub store_path: PathBuf,
+    pub agent_settings_path: PathBuf,
+    pub agent_settings: Mutex<AgentUserSettings>,
+}
+
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogEntryDto {
+    pub id: String,
+    pub label: String,
+    pub detect_cmd: String,
+    pub launch_cmd: String,
+    pub process_match: String,
+    pub default_args: Vec<String>,
+    pub default_env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedLaunchDto {
+    pub cmd: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub shell_line: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentsStateDto {
+    pub settings: AgentUserSettings,
+    pub catalog: Vec<CatalogEntryDto>,
+    pub installed: BTreeMap<String, bool>,
+    pub resolved_default: String,
+}
+
+fn catalog_entry_dto(entry: &CatalogEntry) -> CatalogEntryDto {
+    CatalogEntryDto {
+        id: entry.id.as_str().to_string(),
+        label: entry.label.to_string(),
+        detect_cmd: entry.detect_cmd.to_string(),
+        launch_cmd: entry.launch_cmd.to_string(),
+        process_match: entry.process_match.to_string(),
+        default_args: entry.default_args.iter().map(|s| (*s).to_string()).collect(),
+        default_env: entry
+            .default_env
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    }
+}
+
+fn detect_cmd_for(settings: &AgentUserSettings, entry: &CatalogEntry) -> String {
+    settings
+        .agent_overrides
+        .get(entry.id.as_str())
+        .and_then(|o| o.cmd.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| entry.detect_cmd.to_string())
+}
+
+fn build_agents_state(settings: &AgentUserSettings) -> AgentsStateDto {
+    let mut settings = settings.clone();
+    agent_catalog::coalesce_default_on_disable(&mut settings);
+    let resolved_default = agent_catalog::resolve_default_agent(&settings);
+    let catalog: Vec<CatalogEntryDto> = agent_catalog::builtin_catalog()
+        .iter()
+        .map(catalog_entry_dto)
+        .collect();
+    let mut installed = BTreeMap::new();
+    for entry in agent_catalog::builtin_catalog() {
+        let cmd = detect_cmd_for(&settings, entry);
+        installed.insert(
+            entry.id.as_str().to_string(),
+            agent_catalog::detect_installed(&cmd),
+        );
+    }
+    AgentsStateDto {
+        settings,
+        catalog,
+        installed,
+        resolved_default,
+    }
+}
+
+fn locked_agent_settings(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, AgentUserSettings>, String> {
+    state
+        .agent_settings
+        .lock()
+        .map_err(|_| "Agent 设置锁损坏".to_string())
+}
+
+fn agents_state_from_locked(state: &AppState) -> Result<AgentsStateDto, String> {
+    let mut guard = locked_agent_settings(state)?;
+    let changed = agent_catalog::coalesce_default_on_disable(&mut guard);
+    if changed {
+        agent_settings::save(&state.agent_settings_path, &guard)?;
+    }
+    Ok(build_agents_state(&guard))
+}
+
+#[tauri::command]
+pub fn agents_get_state(state: State<AppState>) -> Result<AgentsStateDto, String> {
+    agents_state_from_locked(&state)
+}
+
+#[tauri::command]
+pub fn agents_save_settings(
+    state: State<AppState>,
+    settings: AgentUserSettings,
+) -> Result<AgentsStateDto, String> {
+    let mut settings = settings;
+    agent_catalog::coalesce_default_on_disable(&mut settings);
+    agent_settings::save(&state.agent_settings_path, &settings)?;
+    let mut guard = locked_agent_settings(&state)?;
+    *guard = settings;
+    Ok(build_agents_state(&guard))
+}
+
+#[tauri::command]
+pub fn agents_refresh_detection(state: State<AppState>) -> Result<AgentsStateDto, String> {
+    agents_state_from_locked(&state)
+}
+
+#[tauri::command]
+pub fn agents_resolve_launch(
+    state: State<AppState>,
+    agent_id: String,
+) -> Result<ResolvedLaunchDto, String> {
+    let id = agent_catalog::parse_catalog_id(&agent_id)
+        .ok_or_else(|| "该 Agent 未启用或不存在".to_string())?;
+    let guard = locked_agent_settings(&state)?;
+    if !agent_catalog::is_enabled(&guard, id) {
+        return Err("该 Agent 未启用或不存在".into());
+    }
+    let launch = agent_catalog::resolve_launch(&guard, id);
+    Ok(ResolvedLaunchDto {
+        cmd: launch.cmd,
+        args: launch.args,
+        env: launch.env,
+        shell_line: launch.shell_line,
+    })
 }
 
 #[derive(Serialize)]
@@ -772,11 +917,17 @@ pub fn init_state(app: &AppHandle) -> Result<(), String> {
     let mut store = Store::load(&store_path);
     store.reconcile();
     let _ = store.save(&store_path);
+    let agent_settings_path = dir.join("agent-settings.json");
+    let mut agent_settings_value = agent_settings::load(&agent_settings_path);
+    let _ = agent_catalog::coalesce_default_on_disable(&mut agent_settings_value);
+    let _ = agent_settings::save(&agent_settings_path, &agent_settings_value);
     app.manage(AppState {
         store: Mutex::new(store),
         creating: Mutex::new(HashSet::new()),
         ptys: PtyManager::new(app, &dir)?,
         store_path,
+        agent_settings_path,
+        agent_settings: Mutex::new(agent_settings_value),
     });
     Ok(())
 }

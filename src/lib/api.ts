@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AgentsStateDto,
+  AgentUserSettings,
+  ResolvedLaunchDto,
+} from "@/lib/agents/types";
+import type {
   AppSnapshot,
   BranchOptions,
   DeleteResult,
@@ -97,6 +102,12 @@ export const api = {
         processName?: string | null;
       }>
     >("list_agent_presence"),
+  agentsGetState: () => invoke<AgentsStateDto>("agents_get_state"),
+  agentsSaveSettings: (settings: AgentUserSettings) =>
+    invoke<AgentsStateDto>("agents_save_settings", { settings }),
+  agentsRefreshDetection: () => invoke<AgentsStateDto>("agents_refresh_detection"),
+  agentsResolveLaunch: (agentId: string) =>
+    invoke<ResolvedLaunchDto>("agents_resolve_launch", { agentId }),
   linkWorktreeNodeModules: (targetPath: string, sourcePath: string, force: boolean) =>
     invoke<LinkNodeModulesResult>("link_worktree_node_modules", {
       targetPath,

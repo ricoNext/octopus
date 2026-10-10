@@ -1,4 +1,5 @@
 mod agent_catalog;
+mod agent_settings;
 mod agent_detect;
 mod commands;
 mod dep_link;
@@ -110,6 +111,10 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::list_agent_presence,
+            commands::agents_get_state,
+            commands::agents_save_settings,
+            commands::agents_refresh_detection,
+            commands::agents_resolve_launch,
             commands::link_worktree_node_modules,
             commands::unlink_worktree_node_modules,
             commands::scan_worktree_node_modules,
