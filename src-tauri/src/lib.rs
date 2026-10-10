@@ -1,3 +1,4 @@
+mod agent_catalog;
 mod agent_detect;
 mod commands;
 mod dep_link;
